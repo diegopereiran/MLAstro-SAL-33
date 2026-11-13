@@ -46,8 +46,8 @@ class Home {
     // once homed mark as done
     void requestDone();
 
-    // reset mount at home
-    CommandError reset(bool fullReset = true);
+    // reset mount at home; initializeCoordinates is reserved for startup origin initialization
+    CommandError reset(bool fullReset = true, bool authoritative = false, bool initializeCoordinates = false);
 
     // get the home position (Mount coordinate system)
     Coordinate getPosition(CoordReturn coordReturn = CR_MOUNT_EQU);
@@ -65,6 +65,7 @@ class Home {
     Settings settings = {MOUNT_AUTO_HOME_DEFAULT == ON, {AXIS1_SENSE_HOME_OFFSET, false}, {AXIS2_SENSE_HOME_OFFSET, false}};
 
     bool isRequestWithReset = false;
+    bool failed = false;
 
     HomeState state;
 
@@ -72,6 +73,7 @@ class Home {
     bool wasTracking = false;
     Coordinate position;
 
+    uint32_t nvKey;
 };
 
 extern Home home;

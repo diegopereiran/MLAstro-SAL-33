@@ -19,9 +19,10 @@
 #include "pec/Pec.h"
 #include "site/Site.h"
 #include "st4/St4.h"
+#include "startupAuthority/StartupAuthority.h"
 #include "status/Status.h"
 
-#if MOUNT_COORDS_MEMORY == ON && NV_ENDURANCE < NVE_VHIGH
+#if MOUNT_COORDS_MEMORY == ON && (NV_DRIVER != NV_MB85RC32 && NV_DRIVER != NV_MB85RC64 && NV_DRIVER != NV_MB85RC256)
   #error "Configuration (Config.h): Setting MOUNT_COORDS_MEMORY requires a NV storage device with very high write endurance (FRAM)"
 #endif
 
@@ -29,17 +30,10 @@ inline void mountWrapper() { mount.poll(); }
 inline void autostartWrapper() { mount.autostartPostponed(); }
 
 void Mount::init() {
-  // confirm the data structure size
-  if (MountSettingsSize < sizeof(MountSettings)) { nv.initError = true; DL("ERR: Mount::init(), MountSettingsSize error"); }
+  startupAuthority.init();
 
-  // write the default settings to NV
-  if (!nv.hasValidKey()) {
-    VLF("MSG: Mount, writing defaults to NV");
-    nv.writeBytes(NV_MOUNT_SETTINGS_BASE, &settings, sizeof(MountSettings));
-  }
-
-  // read the settings
-  nv.readBytes(NV_MOUNT_SETTINGS_BASE, &settings, sizeof(MountSettings));
+  nvKey = nv().kv().computeKey("MOUNT_SETTINGS");
+  if (!nv().kv().getOrInit(nvKey, settings)) { DLF("WRN: Nv, init failed for MOUNT_SETTINGS"); }
 
   // get the main axes ready
   delay(100);
@@ -48,7 +42,11 @@ void Mount::init() {
     axis1.setMotionLimitsCheck(false);
     if (AXIS1_POWER_DOWN == ON) axis1.setPowerDownTime(AXIS1_POWER_DOWN_TIME);
     #ifdef AXIS1_ENCODER_ORIGIN
-      if (AXIS1_ENCODER_ORIGIN == 0) axis1.motor->encoderSetOrigin(nv.readUL(NV_AXIS_ENCODER_ZERO_BASE));
+      uint32_t origin = UINT32_MAX;
+      if (AXIS1_ENCODER_ORIGIN == 0) {
+        nv().kv().getOrInit("AXIS1_ENCODER_ORIGIN", origin);
+        if (origin != UINT32_MAX) axis1.motor->encoderSetOrigin(origin); else startupAuthority.clearAbsoluteCoordinateOriginsEstablished();
+      }
     #endif
   }
 
@@ -58,12 +56,18 @@ void Mount::init() {
     axis2.setMotionLimitsCheck(false);
     if (AXIS2_POWER_DOWN == ON) axis2.setPowerDownTime(AXIS2_POWER_DOWN_TIME);
     #ifdef AXIS2_ENCODER_ORIGIN
-      if (AXIS2_ENCODER_ORIGIN == 0) axis2.motor->encoderSetOrigin(nv.readUL(NV_AXIS_ENCODER_ZERO_BASE + 4));
+      uint32_t origin = UINT32_MAX;
+      if (AXIS2_ENCODER_ORIGIN == 0) {
+        nv().kv().getOrInit("AXIS2_ENCODER_ORIGIN", origin);
+        if (origin != UINT32_MAX) axis2.motor->encoderSetOrigin(origin); else startupAuthority.clearAbsoluteCoordinateOriginsEstablished();
+      }
     #endif
   }
 }
 
 void Mount::begin() {
+  startupAuthority.begin();
+
   axis1.calibrateDriver();
   axis1.enable(MOUNT_ENABLE_IN_STANDBY == ON);
   axis2.calibrateDriver();
@@ -71,7 +75,16 @@ void Mount::begin() {
 
   // initialize the critical subsystems
   site.init();
-  transform.init();
+
+  // invalid mount type, set default
+  if (settings.mountType < MOUNT_SUBTYPE_FIRST || settings.mountType > MOUNT_SUBTYPE_LAST) {
+    settings.mountType = MOUNT_SUBTYPE;
+    nv().kv().put(nvKey, settings);
+    VLF("MSG: Transform, revert mount type to default");
+  }
+
+  if (MOUNT_TYPE == ALTALT) settings.mountType = MOUNT_SUBTYPE;
+  transform.init(settings.mountType);
 
   // setup compensated tracking as configured
   if (TRACK_COMPENSATION_MEMORY == OFF) settings.rc = RC_DEFAULT;
@@ -81,7 +94,23 @@ void Mount::begin() {
   }
 
   // initialize the other subsystems
-  home.reset();
+  // Paired mount-axis absolute position sources can establish the initial
+  // coordinate basis at startup, so allow reset() to bypass sync-threshold
+  // checks only in that case.
+  const bool absoluteAxisAuthority = axis1.motor->hasAbsoluteEncoder() && axis2.motor->hasAbsoluteEncoder();
+  const bool authoritativeReset = absoluteAxisAuthority && startupAuthority.absoluteCoordinateOriginsEstablished();
+  CommandError startupResetError = home.reset(true, authoritativeReset, true);
+  #ifdef HAS_ABSOLUTE_ENCODER_SERVO
+    if (!absoluteAxisAuthority) {
+      DLF("WRN: Mount, absolute encoder startup authority unavailable; paired absolute encoders not detected");
+    }
+  #endif
+  if (absoluteAxisAuthority && !startupAuthority.absoluteCoordinateOriginsEstablished()) {
+    DLF("WRN: Mount, absolute encoder startup authority unavailable; encoder origin missing");
+  }
+  if (authoritativeReset && startupResetError != CE_NONE) {
+    DF("WRN: Mount, absolute encoder startup authority reset failed with code "); DL(startupResetError);
+  }
   limits.init();
   guide.init();
 
@@ -107,15 +136,69 @@ void Mount::begin() {
 
   // restore where we were pointing
   #if MOUNT_COORDS_MEMORY == ON
-    if (!goTo.absoluteEncodersPresent && park.state != PS_PARKED) {
-      int8_t lastMountType = nv.readC(NV_MOUNT_LAST_POSITION);
-      if (transform.mountType == lastMountType) {
-        VLF("MSG: Mount, reading last position");
-        float a1 = nv.readF(NV_MOUNT_LAST_POSITION + 1);
-        float a2 = nv.readF(NV_MOUNT_LAST_POSITION + 5);
-        axis1.setInstrumentCoordinate(a1);
-        axis2.setInstrumentCoordinate(a2);
-        if (!goTo.absoluteEncodersPresent) mount.syncFromOnStepToEncoders = true;
+    lastPosition.a1 = (float)axis1.getInstrumentCoordinate();
+    lastPosition.a2 = (float)axis2.getInstrumentCoordinate();
+    lastPosition.mountType = (uint8_t)(transform.mountType & 0x0Fu);
+    lastPosition.seq = 0;
+    lastPosition.untrusted = true;
+
+    nvKeyLastA = nv().kv().computeKey("MOUNT_LAST_POS_A");
+    nvKeyLastB = nv().kv().computeKey("MOUNT_LAST_POS_B");
+
+    if (!hasAbsoluteEncoders() && park.state != PS_PARKED) {
+
+      MountPositionMemory a{}, b{};
+      KvPartition::Status statusA = nv().kv().get(nvKeyLastA, a);
+      KvPartition::Status statusB = nv().kv().get(nvKeyLastB, b);
+      const bool foundA = (statusA == KvPartition::Status::Ok);
+      const bool foundB = (statusB == KvPartition::Status::Ok);
+      const bool missingA = (statusA == KvPartition::Status::NotFound);
+      const bool missingB = (statusB == KvPartition::Status::NotFound);
+      const bool mountTypeA = foundA && (a.mountType == (uint8_t)(transform.mountType & 0x0Fu));
+      const bool mountTypeB = foundB && (b.mountType == (uint8_t)(transform.mountType & 0x0Fu));
+
+      const bool va = mountTypeA && !a.untrusted;
+      const bool vb = mountTypeB && !b.untrusted;
+
+      const bool commissioningAllowed = !va && !vb && missingA && missingB;
+      startupAuthority.setCommissioningAllowed(commissioningAllowed);
+      if (commissioningAllowed) {
+        VLF("MSG: Mount, startup authority commissioning allowed (coordinate memory not initialized)");
+      } else {
+        VF("MSG: Mount, startup authority coordinate memory verified (A=");
+        if (missingA) { VF("missing"); } else
+        if (mountTypeA) { VF(a.untrusted ? "untrusted" : "trusted"); } else { VF(foundA ? "wrong mount" : "read error"); }
+        VF(", B=");
+        if (missingB) { VF("missing"); } else
+        if (mountTypeB) { VF(b.untrusted ? "untrusted" : "trusted"); } else { VF(foundB ? "wrong mount" : "read error"); }
+        VLF(")");
+      }
+
+      const MountPositionMemory* best = nullptr;
+
+      if (va && vb) {
+        const uint8_t d = (uint8_t)((a.seq - b.seq) & 3u);
+        best = (d == 1u) ? &a : (d == 3u) ? &b : &a;
+      } else if (va) {
+        best = &a;
+      } else if (vb) {
+        best = &b;
+      }
+
+      if (best) {
+        lastPosition = *best;
+        if (limits.validateInstrumentCoordinate(1, lastPosition.a1, true) == CE_NONE &&
+            limits.validateInstrumentCoordinate(2, lastPosition.a2, true) == CE_NONE) {
+          CommandError e = limits.setInstrumentCoordinate(1, lastPosition.a1, true);
+          if (e == CE_NONE) e = limits.setInstrumentCoordinate(2, lastPosition.a2, true);
+          if (e == CE_NONE) {
+            captureNominalIndexPositions();
+            mount.syncFromOnStepToEncoders = true;
+            startupAuthority.setTrusted(true);
+          } else { DLF("WRN: Mount, coordinate memory restore failed"); }
+        } else {
+          DLF("WRN: Mount, coordinate memory restore failed");
+        }
       }
     }
   #endif
@@ -124,12 +207,57 @@ void Mount::begin() {
     transform.align.modelRead();
   #endif
 
+  #if MOUNT_STARTUP_MODE == SA_PERMISSIVE
+    startupAuthority.setTrusted(true);
+  #elif MOUNT_STARTUP_MODE == SA_AUTO
+    #if MOUNT_COORDS_MEMORY == OFF
+      if (!axis1.motor->hasAbsoluteEncoder() && !axis2.motor->hasAbsoluteEncoder()) {
+        startupAuthority.setTrusted(true);
+      }
+    #endif
+  #endif
+  startupAuthority.logStatus();
+
   VF("MSG: Mount, start tracking monitor task (rate 1000ms priority 6)... ");
   if (tasks.add(1000, 0, true, 6, mountWrapper, "MtTrack")) { VLF("success"); } else { VLF("FAILED!"); }
 
   update();
   autostart();
 }
+
+bool Mount::hasAbsoluteEncoders() const {
+  return swsAbsoluteEncodersPresent ||
+         (axis1.motor != nullptr && axis1.motor->hasAbsoluteEncoder()) ||
+         (axis2.motor != nullptr && axis2.motor->hasAbsoluteEncoder());
+}
+
+void Mount::captureNominalIndexPositions() {
+  nominalIndexAxis1Steps = axis1.getIndexPositionSteps();
+  nominalIndexAxis2Steps = axis2.getIndexPositionSteps();
+}
+
+long Mount::getNominalIndexPositionSteps(uint8_t axisNumber) const {
+  switch (axisNumber) {
+    case 1: return nominalIndexAxis1Steps;
+    case 2: return nominalIndexAxis2Steps;
+    default: return 0;
+  }
+}
+
+#if MOUNT_COORDS_MEMORY == ON
+void Mount::saveCoordinateMemory(bool trusted) {
+  if (hasAbsoluteEncoders()) return;
+  if (!startupAuthority.trustEstablished()) return;
+  if (nv().device().endurance() != NvDevice::Endurance::High) return;
+
+  lastPosition.a1 = (float)axis1.getInstrumentCoordinate();
+  lastPosition.a2 = (float)axis2.getInstrumentCoordinate();
+  lastPosition.mountType = (uint8_t)(transform.mountType & 0x0Fu);
+  lastPosition.untrusted = !trusted;
+  if (lastPosition.seq == 3) lastPosition.seq = 0; else lastPosition.seq++;
+  nv().kv().put((lastPosition.seq & 1)? nvKeyLastA : nvKeyLastB, lastPosition);
+}
+#endif
 
 // get current equatorial position (Native coordinate system)
 Coordinate Mount::getPosition(CoordReturn coordReturn) {
@@ -202,6 +330,11 @@ void Mount::autostartPostponed() {
 
   // wait for any homing operation to complete
   if (home.state == HS_HOMING) return;
+  if (home.failed) {
+    DLF("WRN: Mount, autostart home failed");
+    autoStartDone = true;
+    return;
+  }
 
   // auto tracking
   if (!autoTrackDone && TRACK_AUTOSTART == ON) {
@@ -217,7 +350,10 @@ void Mount::autostartPostponed() {
 void Mount::tracking(bool state) {
   if (state == true) {
     enable(state);
-    if (isEnabled()) trackingState = TS_SIDEREAL;
+    if (isEnabled()) {
+      mountStatus.wake();
+      trackingState = TS_SIDEREAL;
+    }
   } else
 
   if (state == false) {
@@ -229,13 +365,7 @@ void Mount::tracking(bool state) {
 
 // enables or disables power to the mount motors
 void Mount::enable(bool state) {
-  if (state == true) {
-    #if LIMIT_STRICT == ON
-      if (!site.dateIsReady || !site.timeIsReady) return;
-    #endif
-
-    mountStatus.wake();
-  } else {
+  if (state == false) {
     trackingState = TS_NONE;
     update();
   }
@@ -247,6 +377,8 @@ void Mount::enable(bool state) {
 // updates the tracking rates, etc. as appropriate for the mount state
 // called once a second by poll() but available here for immediate action
 void Mount::update() {
+  calculateTrackingRates();
+
   static int lastStatusFlashMs = 0;
   int statusFlashMs = 0;
 
@@ -264,7 +396,12 @@ void Mount::update() {
     float f1 = 0, f2 = 0;
     if (!guide.activeAxis1() || guide.state == GU_PULSE_GUIDE) {
       f1 = trackingRateAxis1;
-      if (transform.mountType != ALTAZM && transform.mountType != ALTALT)  f1 += guide.rateAxis1 + pec.rate;
+      if (transform.mountType != ALTAZM && transform.mountType != ALTALT) {
+        f1 += guide.rateAxis1;
+        #if AXIS1_PEC == ON
+          f1 += pec.rate;
+        #endif
+      }
       axis1.setSynchronizedFrequency(siderealToRadF(f1)*SIDEREAL_RATIO_F*site.getSiderealRatio());
     }
 
@@ -284,7 +421,7 @@ void Mount::update() {
     axis2.setSynchronizedFrequency(0.0F);
   }
 
-  if (statusFlashMs != lastStatusFlashMs) {
+  if (statusFlashMs != lastStatusFlashMs || statusFlashMs == SF_STOPPED) {
     lastStatusFlashMs = statusFlashMs;
     mountStatus.flashRate(statusFlashMs);
     xBusy = statusFlashMs == SF_SLEWING;
@@ -292,14 +429,34 @@ void Mount::update() {
 }
 
 void Mount::poll() {
+  #if NV_INIT_ERROR_REVOKES_AUTHORITY == ON
+    if (initError.nv && startupAuthority.trusted()) {
+      startupAuthority.setTrusted(false, StartupAuthority::Reason::NvFault);
+      DLF("WRN: Mount, startup authority trust cleared due to NV fault");
+    }
+  #endif
 
   // stop any movement then disable on motor hardware fault
   if (mount.motorFault()) {
+    if (startupAuthority.trusted()) {
+      startupAuthority.setTrusted(false, StartupAuthority::Reason::MotorFault);
+      DLF("WRN: Mount, startup authority trust cleared due to motor/encoder fault");
+    }
     if (goTo.state > GS_NONE) goTo.abort(); else
     if (guide.state > GU_NONE) guide.abort(); else
     if (axis1.isEnabled() || axis2.isEnabled()) enable(false);
   }
 
+  // keep track of where we are pointing
+  #if MOUNT_COORDS_MEMORY == ON
+    saveCoordinateMemory(startupAuthority.trusted() && home.state != HS_HOMING);
+  #endif
+
+  update();
+}
+
+// calculate tracking and transformed pulse-guide rates in sidereal units
+void Mount::calculateTrackingRates() {
   #ifdef HAL_NO_DOUBLE_PRECISION
     #define DiffRange  0.0087266463F         // 30 arc-minutes in radians
     #define DiffRange2 0.017453292F          // 60 arc-minutes in radians
@@ -309,140 +466,152 @@ void Mount::poll() {
   #endif
   #define DegenerateRange (DiffRange*1.5)    // we were using Deg85
 
-  // keep track of where we are pointing
-  #if MOUNT_COORDS_MEMORY == ON
-    if (!goTo.absoluteEncodersPresent) {
-      nv.ignoreCache(true);
-      nv.write(NV_MOUNT_LAST_POSITION, transform.mountType);
-      nv.write(NV_MOUNT_LAST_POSITION + 1, (float)axis1.getInstrumentCoordinate());
-      nv.write(NV_MOUNT_LAST_POSITION + 5, (float)axis2.getInstrumentCoordinate());
-      nv.ignoreCache(false);
+  while (true) {
+    if (trackingState == TS_NONE) {
+      trackingRateAxis1 = 0.0F;
+      trackingRateAxis2 = 0.0F;
+      return;
     }
-  #endif
 
-  if (trackingState == TS_NONE) {
-    trackingRateAxis1 = 0.0F;
-    trackingRateAxis2 = 0.0F;
-    update();
+    if (transform.isEquatorial() && settings.rc == RC_NONE && trackingRateOffsetRA == 0.0F && trackingRateOffsetDec == 0.0F) {
+      trackingRateAxis1 = trackingRate;
+      trackingRateAxis2 = 0.0F;
+      return;
+    }
+
+    // use one consistent set of rate inputs across task yields
+    const TrackingState trackingStateSnapshot = trackingState;
+    const float trackingRateSnapshot = trackingRate;
+    const float trackingRateOffsetRASnapshot = trackingRateOffsetRA;
+    const float trackingRateOffsetDecSnapshot = trackingRateOffsetDec;
+    const RateCompensation compensationSnapshot = settings.rc;
+    const float guideRateAxis1 = guide.state == GU_PULSE_GUIDE ? guide.rateAxis1 : 0.0F;
+    const float guideRateAxis2 = guide.state == GU_PULSE_GUIDE ? guide.rateAxis2 : 0.0F;
+
+    // get positions 1 (or 30) arc-min ahead and behind the current
+    updatePosition(CR_MOUNT_ALL);
+    double altitude = current.a;
+    double declination = current.d;
+    double altitude2 = current.aa2;
+    PierSide pierSide = current.pierSide;
+
+    // on fast processors calculate true coordinate for a little more accuracy
+    #ifndef HAL_SLOW_PROCESSOR
+      transform.mountToTopocentric(&current);
+      if (transform.mountType == ALTAZM) transform.horToEqu(&current); else
+      if (transform.mountType == ALTALT) transform.aaToEqu(&current);
+    #endif
+
+    Coordinate ahead = current;
+    Coordinate behind = current;
+    Y;
+    double trackingRange = DiffRange*trackingRateSnapshot;
+    ahead.h += trackingRange;
+    behind.h -= trackingRange;
+
+    // convert rate offsets to the angular displacement of each endpoint
+    float timeInSeconds = radToHrs(DiffRange)*3600.0F;
+    float rateOffsetRadsHA = -siderealToRad(trackingRateOffsetRASnapshot)*timeInSeconds;
+    float rateOffsetRadsDec = siderealToRad(trackingRateOffsetDecSnapshot)*timeInSeconds;
+
+    // non-equatorial offsets must precede conversion and compensation of both endpoints
+    if (!transform.isEquatorial()) {
+      rateOffsetRadsHA += siderealToRad(guideRateAxis1)*timeInSeconds;
+      rateOffsetRadsDec += siderealToRad(guideRateAxis2)*timeInSeconds;
+      ahead.h += rateOffsetRadsHA;
+      behind.h -= rateOffsetRadsHA;
+      ahead.d += rateOffsetRadsDec;
+      behind.d -= rateOffsetRadsDec;
+    }
+
+    // Alt/Az refraction and pointing corrections operate on horizon coordinates
+    if (transform.mountType == ALTAZM) { transform.equToHor(&ahead); transform.equToHor(&behind); Y; }
+
+    // apply (optional) refraction to both endpoints
+    if (compensationSnapshot == RC_MODEL || compensationSnapshot == RC_MODEL_DUAL ||
+        compensationSnapshot == RC_REFRACTION || compensationSnapshot == RC_REFRACTION_DUAL) {
+      transform.topocentricToObservedPlace(&ahead); Y;
+      transform.topocentricToObservedPlace(&behind); Y;
+    }
+
+    // Alt/Alt refraction updates h/d, so derive both axis coordinates afterward
+    if (transform.mountType == ALTALT) { transform.equToAa(&ahead); transform.equToAa(&behind); Y; }
+
+    // apply (optional) pointing model without overwriting the resulting mount coordinates
+    if (compensationSnapshot == RC_MODEL || compensationSnapshot == RC_MODEL_DUAL) {
+      transform.observedPlaceToMount(&ahead); Y;
+      transform.observedPlaceToMount(&behind); Y;
+    }
+
+    // retry before publishing rates if any input changed during a yield
+    if (trackingState != trackingStateSnapshot || trackingRate != trackingRateSnapshot ||
+        trackingRateOffsetRA != trackingRateOffsetRASnapshot ||
+        trackingRateOffsetDec != trackingRateOffsetDecSnapshot || settings.rc != compensationSnapshot ||
+        (!transform.isEquatorial() &&
+         (guideRateAxis1 != (guide.state == GU_PULSE_GUIDE ? guide.rateAxis1 : 0.0F) ||
+          guideRateAxis2 != (guide.state == GU_PULSE_GUIDE ? guide.rateAxis2 : 0.0F)))) continue;
+
+    // preserve equatorial compensation and tracking-offset ordering
+    if (transform.isEquatorial()) {
+      if (compensationSnapshot != RC_REFRACTION_DUAL && compensationSnapshot != RC_MODEL_DUAL) { behind.d = ahead.d; }
+      ahead.h += rateOffsetRadsHA;
+      behind.h -= rateOffsetRadsHA;
+      ahead.d += rateOffsetRadsDec;
+      behind.d -= rateOffsetRadsDec;
+    }
+
+    // transfer to variables named appropriately for mount coordinates
+    // these stay double, the differences below are ~5.8e-4 rad from ~1 rad coordinates
+    double aheadAxis1, aheadAxis2, behindAxis1, behindAxis2;
+    if (transform.mountType == ALTAZM) {
+      aheadAxis1 = ahead.z;
+      aheadAxis2 = ahead.a;
+      behindAxis1 = behind.z;
+      behindAxis2 = behind.a;
+    } else
+    if (transform.mountType == ALTALT) {
+      aheadAxis1 = ahead.aa1;
+      aheadAxis2 = ahead.aa2;
+      behindAxis1 = behind.aa1;
+      behindAxis2 = behind.aa2;
+    } else {
+      aheadAxis1 = ahead.h;
+      aheadAxis2 = ahead.d;
+      behindAxis1 = behind.h;
+      behindAxis2 = behind.d;
+    }
+
+    // calculate the Axis1 tracking rate
+    if (aheadAxis1 < -Deg90 && behindAxis1 > Deg90) aheadAxis1 += Deg360;
+    if (behindAxis1 < -Deg90 && aheadAxis1 > Deg90) behindAxis1 += Deg360;
+    float rate1 = (aheadAxis1 - behindAxis1)/DiffRange2;
+    if (fabs(trackingRateAxis1 - rate1) <= 0.005F) trackingRateAxis1 = (trackingRateAxis1*9.0F + rate1)/10.0F; else trackingRateAxis1 = rate1;
+
+    // calculate the Axis2 Dec/Alt tracking rate
+    float rate2 = (aheadAxis2 - behindAxis2)/DiffRange2;
+    if (pierSide == PIER_SIDE_WEST) rate2 = -rate2;
+    if (fabs(trackingRateAxis2 - rate2) <= 0.005F) trackingRateAxis2 = (trackingRateAxis2*9.0F + rate2)/10.0F; else trackingRateAxis2 = rate2;
+
+    // override for special case of near a celestial pole
+    if (fabs(declination) > Deg90 - DegenerateRange) {
+      if (transform.isEquatorial()) trackingRateAxis1 = trackingRateSnapshot; else
+      if (transform.mountType == ALTAZM) trackingRateAxis1 = 0.0F; else
+      if (transform.mountType == ALTALT) trackingRateAxis1 = 0.0F;
+      trackingRateAxis2 = 0.0F;
+    }
+
+    // override for both rates for special case near the Azm axis of rotation (Zenith)
+    if (altitude > Deg90 - DegenerateRange) {
+      // if (transform.isEquatorial()) trackingRateAxis1 = ztr(current.a); else
+      // if (transform.mountType == ALTALT) trackingRateAxis1 = ztr(current.a); else
+      if (transform.mountType == ALTAZM) trackingRateAxis1 = 0.0F;
+      trackingRateAxis2 = 0.0F;
+    }
+
+    // override for both rates for special case near the aa1 axis of rotation
+    if (transform.mountType == ALTALT && fabs(altitude2) > Deg90 - DegenerateRange) { trackingRateAxis1 = 0.0F; }
     return;
   }
-
-  if (transform.isEquatorial() && settings.rc == RC_NONE && trackingRateOffsetRA == 0.0F && trackingRateOffsetDec == 0.0F) {
-    trackingRateAxis1 = trackingRate;
-    trackingRateAxis2 = 0.0F;
-    update();
-    return;
-  }
-
-  // get positions 1 (or 30) arc-min ahead and behind the current
-  updatePosition(CR_MOUNT_ALL);
-  double altitude = current.a;
-  double declination = current.d;
-  double altitude2 = current.aa2;
-
-  // on fast processors calculate true coordinate for a little more accuracy
-  #ifndef HAL_SLOW_PROCESSOR
-    transform.mountToTopocentric(&current);
-    if (transform.mountType == ALTAZM) transform.horToEqu(&current); else
-    if (transform.mountType == ALTALT) transform.aaToEqu(&current);
-  #endif
-
-  Coordinate ahead = current;
-  Coordinate behind = current;
-  Y;
-  ahead.h += DiffRange;
-  behind.h -= DiffRange;
-
-  // create horizon coordinates that would exist ahead and behind the current position
-  if (transform.mountType == ALTAZM) { transform.equToHor(&ahead); transform.equToHor(&behind); Y; } else
-  if (transform.mountType == ALTALT) { transform.equToAa(&ahead); transform.equToAa(&behind); Y; }
-
-  // apply (optional) pointing model and refraction
-  if (settings.rc == RC_MODEL || settings.rc == RC_MODEL_DUAL) {
-    transform.topocentricToObservedPlace(&ahead); Y;
-    transform.topocentricToObservedPlace(&behind); Y;
-    transform.observedPlaceToMount(&ahead); Y;
-    transform.observedPlaceToMount(&behind); Y;
-  } else if (settings.rc == RC_REFRACTION || settings.rc == RC_REFRACTION_DUAL) {
-    transform.topocentricToObservedPlace(&ahead); Y;
-    transform.topocentricToObservedPlace(&behind); Y;
-  }
-
-  // drop the dual axis if not enabled
-  if (settings.rc != RC_REFRACTION_DUAL && settings.rc != RC_MODEL_DUAL) { behind.d = ahead.d; }
-
-  // apply tracking rate offset to equatorial coordinates
-  float timeInSeconds = radToHrs(DiffRange)*3600.0F;
-  float trackingRateOffsetRadsRA = siderealToRad(trackingRateOffsetRA)*timeInSeconds;
-  float trackingRateOffsetRadsDec = siderealToRad(trackingRateOffsetDec)*timeInSeconds;
-  ahead.h -= trackingRateOffsetRadsRA;
-  behind.h += trackingRateOffsetRadsRA;
-  ahead.d += trackingRateOffsetRadsDec;
-  behind.d -= trackingRateOffsetRadsDec;
-
-  // apply non-equatorial guide rate offset to equatorial coordinates
-  if (guide.state == GU_PULSE_GUIDE && (transform.mountType == ALTAZM || transform.mountType == ALTALT)) {
-    float trackingRateGuideRadsRA = siderealToRad(guide.rateAxis1)*timeInSeconds*2.0;
-    float trackingRateGuideRadsDec = siderealToRad(guide.rateAxis2)*timeInSeconds*2.0;
-    ahead.h += trackingRateGuideRadsRA;
-    behind.h -= trackingRateGuideRadsRA;
-    ahead.d += trackingRateGuideRadsDec;
-    behind.d -= trackingRateGuideRadsDec;
-  }
-
-  // transfer to variables named appropriately for mount coordinates
-  float aheadAxis1, aheadAxis2, behindAxis1, behindAxis2;
-  if (transform.mountType == ALTAZM) {
-    transform.equToHor(&ahead);
-    aheadAxis1 = ahead.z;
-    aheadAxis2 = ahead.a;
-    behindAxis1 = behind.z;
-    behindAxis2 = behind.a;
-  } else
-  if (transform.mountType == ALTALT) {
-    transform.equToAa(&ahead);
-    aheadAxis1 = ahead.aa1;
-    aheadAxis2 = ahead.aa2;
-    behindAxis1 = behind.aa1;
-    behindAxis2 = behind.aa2;
-  } else {
-    aheadAxis1 = ahead.h;
-    aheadAxis2 = ahead.d;
-    behindAxis1 = behind.h;
-    behindAxis2 = behind.d;
-  }
-
-  // calculate the Axis1 tracking rate
-  if (aheadAxis1 < -Deg90 && behindAxis1 > Deg90) aheadAxis1 += Deg360;
-  if (behindAxis1 < -Deg90 && aheadAxis1 > Deg90) behindAxis1 += Deg360;
-  float rate1 = (aheadAxis1 - behindAxis1)/DiffRange2;
-  if (fabs(trackingRateAxis1 - rate1) <= 0.005F) trackingRateAxis1 = (trackingRateAxis1*9.0F + rate1)/10.0F; else trackingRateAxis1 = rate1;
-
-  // calculate the Axis2 Dec/Alt tracking rate
-  float rate2 = (aheadAxis2 - behindAxis2)/DiffRange2;
-  if (current.pierSide == PIER_SIDE_WEST) rate2 = -rate2;
-  if (fabs(trackingRateAxis2 - rate2) <= 0.005F) trackingRateAxis2 = (trackingRateAxis2*9.0F + rate2)/10.0F; else trackingRateAxis2 = rate2;
-
-  // override for special case of near a celestial pole
-  if (fabs(declination) > Deg90 - DegenerateRange) {
-    if (transform.isEquatorial()) trackingRateAxis1 = trackingRate; else
-    if (transform.mountType == ALTAZM) trackingRateAxis1 = 0.0F; else
-    if (transform.mountType == ALTALT) trackingRateAxis1 = 0.0F;
-    trackingRateAxis2 = 0.0F;
-  }
-
-  // override for both rates for special case near the Azm axis of rotation (Zenith)
-  if (altitude > Deg90 - DegenerateRange) {
-//    if (transform.isEquatorial()) trackingRateAxis1 = ztr(current.a); else
-//    if (transform.mountType == ALTALT) trackingRateAxis1 = ztr(current.a); else
-    if (transform.mountType == ALTAZM) trackingRateAxis1 = 0.0F; 
-    trackingRateAxis2 = 0.0F;
-  }
-
-  // override for both rates for special case near the aa1 axis of rotation
-  if (transform.mountType == ALTALT && fabs(altitude2) > Deg90 - DegenerateRange) { trackingRateAxis1 = 0.0F; }
-
-  update();
 }
 
 // alternate tracking rate calculation method
@@ -461,7 +630,13 @@ float Mount::ztr(float a) {
 
 // update where we are pointing *now*
 void Mount::updatePosition(CoordReturn coordReturn) {
-  current = transform.instrumentToMount(axis1.getInstrumentCoordinate(), axis2.getInstrumentCoordinate());
+  #if AXIS2_TANGENT_ARM_CORRECTION == ON
+    const double poleTolerance = 0.0;
+  #else
+    // A rounded pole target must not change orientation while the other axis is moving.
+    const double poleTolerance = 0.5/axis2.getStepsPerMeasure();
+  #endif
+  current = transform.instrumentToMount(axis1.getInstrumentCoordinate(), axis2.getInstrumentCoordinate(), current.pierSide, poleTolerance);
   if (isHome()) {
     transform.mountToInstrument(&current, &current.a1, &current.a2);
     current.pierSide = PIER_SIDE_NONE;

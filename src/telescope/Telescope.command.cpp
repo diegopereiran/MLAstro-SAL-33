@@ -8,6 +8,7 @@
 #include "../lib/tasks/OnTask.h"
 #include "../lib/gpioEx/GpioEx.h"
 #include "../lib/nv/Nv.h"
+
 #include "../lib/analog/Analog.h"
 #include "../lib/convert/Convert.h"
 
@@ -113,7 +114,7 @@ bool Telescope::command(char reply[], char command[], char parameter[], bool *su
       analog.write(RETICLE_LED_PIN, RETICLE_LED_INVERT == ON ? duty : 1.0F - duty);
 
       #if RETICLE_LED_MEMORY == ON
-        nv.write(NV_TELESCOPE_SETTINGS_BASE, reticleBrightness);
+        nv().kv().put("TELESCOPE_SETTINGS", reticleBrightness);
       #endif
     #endif
     *numericReply = false;
@@ -137,18 +138,49 @@ bool Telescope::command(char reply[], char command[], char parameter[], bool *su
     // :ERESET#   Reset the MCU
     //            Returns: Nothing
     if (command[1] == 'R' && parameter[0] == 'E' && parameter[1] == 'S' && parameter[2] == 'E' && parameter[3] == 'T' && parameter[4] == 0) {
+
       #ifdef HAL_RESET
-        nv.wait();
-        tasks.yield(1000);
-        HAL_RESET();
+        VLF("MSG: Mount, flushing NV/EEPROM before reset...");
+        bool flushOk = !nv().active().hasCommit() || nv().active().commit() == NvDevice::IoStatus::Ok;
+        const uint32_t startMs = millis();
+        const uint32_t timeoutMs = 30000;
+        // The priority-7 NV service cannot run while this priority-5 command
+        // yields. Service it explicitly so cached writes can finish.
+        while (flushOk && !nv().active().commitDone() && (uint32_t)(millis() - startMs) < timeoutMs) {
+          nv().poll();
+          tasks.yield(1);
+        }
+        if (flushOk && nv().active().commitDone()) {
+          VLF("MSG: Mount, resetting OnStep...");
+          tasks.yield(1000);
+          HAL_RESET();
+        } else {
+          DLF("WRN: Mount, NV/EEPROM flush failed or timed out; reset cancelled");
+          *commandError = CE_0;
+        }
       #endif
+
       *numericReply = false;
     } else
 
-    // :ENVRESET# Wipe flash
+    // :ENVRESET# Reset NV memory to defaults on the next boot
     if (command[1] == 'N' && parameter[0] == 'V' && parameter[1] == 'R' && parameter[2] == 'E' && parameter[3] == 'S' && parameter[4] == 'E' && parameter[5] == 'T' && parameter[6] == 0) {
-      nv.writeKey(0);
-      strcpy(reply, "NV memory will be cleared on the next boot.");
+      bool flushOk = nv().volume().invalidateNextMount() == NvVolume::Status::Ok;
+      if (flushOk && nv().active().hasCommit()) flushOk = nv().active().commit() == NvDevice::IoStatus::Ok;
+      const uint32_t startMs = millis();
+      const uint32_t timeoutMs = 30000;
+      // Service NV here: yielding from a command cannot run its lower-priority task.
+      while (flushOk && !nv().active().commitDone() && (uint32_t)(millis() - startMs) < timeoutMs) {
+        nv().poll();
+        tasks.yield(1);
+      }
+      if (flushOk && nv().active().commitDone()) {
+        strcpy(reply, "NV memory will be cleared on the next boot.");
+      } else {
+        DLF("WRN: Mount, NV reset write failed or timed out");
+        *commandError = CE_0;
+        strcpy(reply, "NV reset failed; retry before rebooting.");
+      }
       *numericReply = false;
     } else
 
@@ -197,7 +229,7 @@ bool Telescope::command(char reply[], char command[], char parameter[], bool *su
       if (parameter[0] == 'N') sprintf(reply, "%i.%02i%s", firmware.version.major, firmware.version.minor, firmware.version.patch); else
       if (parameter[0] == 'P') strcpy(reply, firmware.name); else
       if (parameter[0] == 'T') strcpy(reply, firmware.time); else
-      if (parameter[0] == 'C') { sstrcpy(reply, PRODUCT_DESCRIPTION, 40); } else
+      if (parameter[0] == 'C') { strncpy(reply, PRODUCT_DESCRIPTION, 40); } else
       if (parameter[0] == 'H') strcpy(reply, PINMAP_STR); else *commandError = CE_CMD_UNKNOWN;
       *numericReply = false;
     } else
@@ -243,15 +275,6 @@ bool Telescope::command(char reply[], char command[], char parameter[], bool *su
             *commandError = CE_0;
           }
         } else return false;
-      } else
-
-      if (parameter[0] == 'A') {
-        // :GXA0#     Get axis/driver revert all state
-        //            Returns: Value
-        if (parameter[1] == '0') {
-          uint16_t axesToRevert = nv.readUI(NV_AXIS_SETTINGS_REVERT);
-          if (!(axesToRevert & 1)) *commandError = CE_0;
-        } else return false;
       } else return false;
 
     } else return false;
@@ -280,25 +303,6 @@ bool Telescope::command(char reply[], char command[], char parameter[], bool *su
       if (parameter[1] == 'C') {
         if (!weather.setHumidity(f)) *commandError = CE_PARAM_RANGE;
       } else return false;
-    } else
-
-    if (parameter[0] == 'A') {
-      // :SXAC,0#   for run-time NV (EEPROM) axis settings
-      // :SXAC,1#   for compile-time Config.h axis settings
-      //            Return: 0 failure, 1 success
-      if (parameter[1] == 'C' && parameter[4] == 0) {
-        if (parameter[3] == '0' || parameter[3] == '1') {
-          uint16_t axesToRevert = nv.readUI(NV_AXIS_SETTINGS_REVERT);
-          if (parameter[3] == '0') {
-             VLF("MSG: Using Axes settings from NV (EEPROM)");
-             bitSet(axesToRevert, 0);
-           } else {
-             VLF("MSG: Using Axes settings from Config.h");
-             bitClear(axesToRevert, 0);
-           }
-          nv.update(NV_AXIS_SETTINGS_REVERT, axesToRevert);
-        } else *commandError = CE_PARAM_RANGE;
-      }
     } else return false;
   } else return false;
 

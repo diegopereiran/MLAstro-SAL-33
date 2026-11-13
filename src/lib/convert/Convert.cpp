@@ -4,11 +4,6 @@
 #include "../../Common.h"
 #include "Convert.h"
 
-void strncpyex(char *result, const char *source, size_t length) {
-  strncpy(result, source, length);
-  result[length - 1] = 0;
-}
-
 #if defined(ARDUINO_ARDUINO_NANO33BLE) || \
     defined(__TEENSYDUINO__) || \
     defined(ARDUINO_ARCH_SAMD) || \
@@ -200,7 +195,7 @@ void Convert::doubleToHms(char *reply, double value, bool signPresent, Precision
 
   // setup formatting, handle adding the sign
   if (signPresent) {
-    if (value < 0) { value = -value; strcpy(sign,"-"); } else strcpy(sign,"+");
+    if (value < 0) { value = -value; strcpy(sign, "-"); } else strcpy(sign, "+");
   }
   
   // round to 0.00005 second or 0.5 second, depending on precision mode
@@ -236,7 +231,7 @@ void Convert::doubleToDms(char *reply, double value, bool fullRange, bool signPr
 
   // setup formatting, handle adding the sign
   if (signPresent) {
-    if (value < 0) { value = -value; strcpy(sign,"-"); } else strcpy(sign,"+");
+    if (value < 0) { value = -value; strcpy(sign, "-"); } else strcpy(sign, "+");
   }
 
   // round to 0.0005 arc-second or 0.5 arc-second, depending on precision mode
@@ -279,12 +274,15 @@ bool Convert::atoi2(char *a, uint8_t *u, bool sign) {
               
 bool Convert::atof2(char *a, double *d, bool sign) {
   int16_t dc = 0;
+  bool hasDigit = false;
   int16_t len = strlen(a);
   for (int l = 0; l < len; l++) {
     if (l == 0 && (a[l] == '+' || a[l] == '-') && sign) continue;
     if (a[l] == '.') { if (dc == 0) { dc++; continue; } else return false; }
     if (a[l] < '0' || a[l] > '9') return false;
+    hasDigit = true;
   }
+  if (!hasDigit) return false;
   *d = atof(a);
   return true;
 }

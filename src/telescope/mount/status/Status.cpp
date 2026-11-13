@@ -9,6 +9,8 @@
 #include "../../../lib/gpioEx/GpioEx.h"
 #include "../../../lib/nv/Nv.h"
 
+#include "../Mount.h"
+#include "../limits/Limits.h"
 #include "../park/Park.h"
 
 #if STATUS_MOUNT_LED != OFF && MOUNT_LED_PIN != OFF
@@ -30,14 +32,10 @@ void generalWrapper() { mountStatus.general(); }
 
 // get mount status ready
 void Status::init() {
-  if (!nv.hasValidKey()) {
-    VLF("MSG: Mount, status writing defaults to NV");
-    nv.write(NV_MOUNT_STATUS_BASE, (uint8_t)sound.enabled);
-  }
-
   #if STATUS_BUZZER_MEMORY == ON
-    sound.enabled = nv.read(NV_MOUNT_STATUS_BASE);
+    if (!nv().kv().getOrInit("STATUS_SETTINGS", settings)) { DLF("WRN: Nv, init failed for STATUS_SETTINGS"); }
   #endif
+  sound.enabled = settings.soundEnabled;
 
   #if PARK_STATUS != OFF && PARK_STATUS_PIN != OFF
     pinModeEx(PARK_STATUS_PIN, OUTPUT);
@@ -51,13 +49,21 @@ void Status::init() {
 void Status::wake() {
   static bool ready = false;
 
-  if (!ready) {
-    #if STATUS_LED == ON
+  #if STATUS_LED != OFF && STATUS_LED_PIN != OFF && \
+    ((STATUS_MOUNT_LED != OFF && MOUNT_LED_PIN != OFF && MOUNT_LED_PIN == STATUS_LED_PIN) || \
+     (STATUS_BUZZER != OFF && STATUS_BUZZER_PIN != OFF && STATUS_BUZZER_PIN == STATUS_LED_PIN))
+    static bool statusLedReleased = false;
+    if (!statusLedReleased) {
       // if Mount buzzer or status LED are using the Telescope status LED pin, disable it and use here now
-      if (STATUS_MOUNT_LED != OFF && MOUNT_LED_PIN == STATUS_LED_PIN) tasks.remove(tasks.getHandleByName("StaLed"));
-      if (STATUS_BUZZER != OFF && STATUS_BUZZER_PIN == STATUS_LED_PIN) tasks.remove(tasks.getHandleByName("StaLed"));
-    #endif
+      uint8_t statusLedHandle = tasks.getHandleByName("StaLed");
+      if (statusLedHandle) {
+        tasks.remove(statusLedHandle);
+        statusLedReleased = true;
+      }
+    }
+  #endif
 
+  if (!ready) {
     #if STATUS_MOUNT_LED != OFF && MOUNT_LED_PIN != OFF
       if (!tasks.getHandleByName("mntLed")) {
         pinModeEx(MOUNT_LED_PIN, OUTPUT);
@@ -85,6 +91,10 @@ void Status::flashRate(int period) {
   #else
     period = period;
   #endif
+}
+
+uint8_t Status::errorCode() {
+  return limits.errorCode();
 }
 
 // mount misc. general status indicators

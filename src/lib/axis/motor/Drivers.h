@@ -46,7 +46,7 @@ typedef struct DriverStatus {
 #define AXPN_MIN_PWR "$25"
 #define AXPN_MAX_PWR "$26"
 
-#define AXPN_1 "Steps/degree"
+#define AXPN_1 "Counts/degree"
 #define AXPN_2 "Min limit, degs"
 #define AXPN_3 "Max limit, degs"
 #define AXPN_4 "Steps/um"
@@ -67,7 +67,7 @@ typedef struct DriverStatus {
 #define AXPN_19 "P slewing"
 #define AXPN_20 "I slewing"
 #define AXPN_21 "D slewing"
-#define AXPN_22 "Rads/count"
+#define AXPN_22 "Counts/radian"
 #define AXPN_23 "Steps/count ratio"
 #define AXPN_24 "Max accel, %/s/s"
 #define AXPN_25 "Min power, %"

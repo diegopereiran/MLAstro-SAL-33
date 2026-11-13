@@ -16,7 +16,7 @@
 
   #elif defined(AXIS@_MKS42D_PRESENT)
     const MksDriverSettings DriverSettingsAxis@ = {AXIS@_DRIVER_MODEL, AXIS@_DRIVER_STATUS};
-    Mks42DMotor motor_@(@, AXIS@_REVERSE, &DriverSettingsAxis@, AXIS@_STEPS_PER_DEGREE);
+    Mks42DMotor motor_@(@, AXIS@_REVERSE, &DriverSettingsAxis@, AXIS@_STEPS_PER_MICRON);
 
   #elif defined(AXIS@_SERVO_PRESENT)
     ServoControl servoControlAxis@;
@@ -43,15 +43,13 @@
       DualPid feedbackAxis@(AXIS@_PID_P, AXIS@_PID_I, AXIS@_PID_D, AXIS@_PID_P_GOTO, AXIS@_PID_I_GOTO, AXIS@_PID_D_GOTO, AXIS@_PID_SENSITIVITY);
     #endif
 
-    #if AXIS@_SERVO_FLTR == KALMAN
-      KalmanFilter filterAxis@(AXIS@_SERVO_FLTR_MEAS_U, AXIS@_SERVO_FLTR_VARIANCE);
-    #elif AXIS@_SERVO_FLTR == ROLLING
-      RollingFilter filterAxis@(AXIS@_SERVO_FLTR_WSIZE);
-    #elif AXIS@_SERVO_FLTR == WINDOWING
-      WindowingFilter filterAxis@(AXIS@_SERVO_FLTR_WSIZE);
-    #elif AXIS@_SERVO_FLTR == OFF
-      Filter filterAxis@;
-    #endif
+  #if AXIS@_SERVO_FLTR == KALMAN
+    KalmanFilter filterAxis@(AXIS@_SERVO_FLTR_MEAS_U, AXIS@_SERVO_FLTR_VARIANCE);
+  #elif AXIS@_SERVO_FLTR == ROLLING
+    RollingFilter filterAxis@(AXIS@_SERVO_FLTR_WSIZE);
+  #elif AXIS@_SERVO_FLTR == OFF
+    Filter filterAxis@;
+  #endif
 
     const ServoPins DriverPinsAxis@ = {AXIS@_SERVO_PH1_PIN, AXIS@_SERVO_PH1_STATE, AXIS@_SERVO_PH2_PIN, AXIS@_SERVO_PH2_STATE, AXIS@_ENABLE_PIN, AXIS@_ENABLE_STATE, AXIS@_M0_PIN, AXIS@_M1_PIN, AXIS@_M2_PIN, AXIS@_M3_PIN, AXIS@_FAULT_PIN};
     const ServoSettings DriverSettingsAxis@ = {AXIS@_DRIVER_MODEL, AXIS@_DRIVER_STATUS, AXIS@_SERVO_ACCELERATION};
@@ -64,15 +62,15 @@
       ServoTmc2130DC driver@(@, &DriverPinsAxis@, &DriverSettingsAxis@, AXIS@_SERVO_DC_PWR_MIN, AXIS@_SERVO_DC_PWR_MAX);
     #elif AXIS@_DRIVER_MODEL == SERVO_TMC5160_DC
       ServoTmc5160DC driver@(@, &DriverPinsAxis@, &DriverSettingsAxis@, AXIS@_SERVO_DC_PWR_MIN, AXIS@_SERVO_DC_PWR_MAX);
-    #elif AXIS@_DRIVER_MODEL == TMC2209 || AXIS@_DRIVER_MODEL == TMC2226
-      ServoTmc2209 driver@(@, &DriverPinsAxis@, &DriverSettingsAxis@, AXIS@_MOTOR_STEPS_PER_MICRON/AXIS@_STEPS_PER_MICRON, AXIS@_DRIVER_MICROSTEPS, AXIS@_DRIVER_IRUN, AXIS@_DRIVER_DECAY, AXIS@_DRIVER_DECAY_GOTO);
+    #elif AXIS@_DRIVER_MODEL == SERVO_TMC2209
+      ServoTmc2209 driver@(@, &DriverPinsAxis@, &DriverSettingsAxis@, AXIS@_STEPS_PER_MICRON/AXIS@_COUNTS_PER_MICRON, AXIS@_DRIVER_MICROSTEPS, AXIS@_DRIVER_IRUN, AXIS@_DRIVER_DECAY, AXIS@_DRIVER_DECAY_GOTO);
     #elif AXIS@_DRIVER_MODEL == SERVO_TMC5160
-      ServoTmc5160 driver@(@, &DriverPinsAxis@, &DriverSettingsAxis@, AXIS@_MOTOR_STEPS_PER_MICRON/AXIS@_STEPS_PER_MICRON, AXIS@_DRIVER_MICROSTEPS, AXIS@_DRIVER_IRUN, AXIS@_DRIVER_DECAY, AXIS@_DRIVER_DECAY_GOTO);
+      ServoTmc5160 driver@(@, &DriverPinsAxis@, &DriverSettingsAxis@, AXIS@_STEPS_PER_MICRON/AXIS@_COUNTS_PER_MICRON, AXIS@_DRIVER_MICROSTEPS, AXIS@_DRIVER_IRUN, AXIS@_DRIVER_DECAY, AXIS@_DRIVER_DECAY_GOTO);
     #elif AXIS@_DRIVER_MODEL == SERVO_KTECH
-      ServoKTech driver@(@, &DriverSettingsAxis@, AXIS@_MOTOR_STEPS_PER_MICRON/AXIS@_STEPS_PER_MICRON);
+      ServoKTech driver@(@, &DriverSettingsAxis@, AXIS@_STEPS_PER_MICRON/AXIS@_COUNTS_PER_MICRON);
     #endif
 
-    ServoMotor motor_@(@, AXIS@_REVERSE, ((ServoDriver*)&driver@), &filterAxis@, &encAxis@, AXIS@_ENCODER_ORIGIN, AXIS@_ENCODER_REVERSE == ON, &feedbackAxis@, &servoControlAxis@, AXIS@_SYNC_THRESHOLD);
+    ServoMotor motor_@(@, AXIS@_REVERSE, ((ServoDriver*)&driver@), &filterAxis@, &encAxis@, AXIS@_ENCODER_ORIGIN, AXIS@_ENCODER_REVERSE == ON, &feedbackAxis@, &servoControlAxis@);
 
   #elif defined(AXIS@_STEP_DIR_PRESENT)
     const StepDirDriverPins DriverPinsAxis@ = {AXIS@_M0_PIN, AXIS@_M1_PIN, AXIS@_M2_PIN, AXIS@_M2_ON_STATE, AXIS@_M3_PIN, AXIS@_DECAY_PIN, AXIS@_FAULT_PIN};
@@ -102,7 +100,7 @@
   #endif
 
   const AxisPins PinsAxis@ = {AXIS@_SENSE_LIMIT_MIN_PIN, AXIS@_SENSE_HOME_PIN, AXIS@_SENSE_LIMIT_MAX_PIN, {AXIS@_SENSE_HOME, AXIS@_SENSE_HOME_INIT, AXIS@_SENSE_HOME_DIST_LIMIT*1000.0F, AXIS@_SENSE_LIMIT_MIN, AXIS@_SENSE_LIMIT_MAX, AXIS@_SENSE_LIMIT_INIT}};
-  const AxisSettings SettingsAxis@ = {AXIS@_STEPS_PER_MICRON, {AXIS@_LIMIT_MIN*1000.0F, AXIS@_LIMIT_MAX*1000.0F}, AXIS@_BACKLASH_RATE};
+  const AxisSettings SettingsAxis@ = {AXIS@_COUNTS_PER_MICRON, {AXIS@_LIMIT_MIN*1000.0F, AXIS@_LIMIT_MAX*1000.0F}, AXIS@_BACKLASH_RATE};
   }
 
   Motor& motor@ = motor_@;

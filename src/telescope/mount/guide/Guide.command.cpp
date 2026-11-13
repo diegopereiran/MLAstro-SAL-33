@@ -34,16 +34,16 @@ bool Guide::command(char *reply, char *command, char *parameter, bool *suppressF
       if (convert.atoi2(&parameter[1], &timeMs)) {
         if (timeMs >= 0) {
           if (parameter[0] == 'w') {
-            *commandError = startAxis1(GA_FORWARD, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis1RateSelect, timeMs);
+            *commandError = startAxis1(GA_FORWARD, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis1RateSelect, timeMs, true);
           } else
           if (parameter[0] == 'e') {
-            *commandError = startAxis1(GA_REVERSE, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis1RateSelect, timeMs);
+            *commandError = startAxis1(GA_REVERSE, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis1RateSelect, timeMs, true);
           } else
           if (parameter[0] == 'n') {
-            *commandError = startAxis2(GA_FORWARD, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis2RateSelect, timeMs);
+            *commandError = startAxis2(GA_FORWARD, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis2RateSelect, timeMs, true);
           } else
           if (parameter[0] == 's') {
-            *commandError = startAxis2(GA_REVERSE, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis2RateSelect, timeMs);
+            *commandError = startAxis2(GA_REVERSE, (GUIDE_SEPARATE_PULSE_RATE == ON) ? settings.pulseRateSelect : settings.axis2RateSelect, timeMs, true);
           } else *commandError = CE_CMD_UNKNOWN;
           if (command[1] == 'g') *numericReply = false;
         } else *commandError = CE_PARAM_RANGE;
@@ -183,7 +183,7 @@ bool Guide::command(char *reply, char *command, char *parameter, bool *suppressF
         VF("MSG: Guide rate "); V(r); VLF(" selected");
         if (GUIDE_SEPARATE_PULSE_RATE == ON && (GuideRateSelect)r <= GR_1X) {
           settings.pulseRateSelect = (GuideRateSelect)r;
-          nv.updateBytes(NV_MOUNT_GUIDE_BASE, &settings, sizeof(GuideSettings));
+          nv().kv().put(nvKey, settings);
         }
       } else *commandError = CE_PARAM_RANGE;
       *numericReply = false; 

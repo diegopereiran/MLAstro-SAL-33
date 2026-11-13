@@ -26,7 +26,7 @@ enum CoordReturn: uint8_t {CR_MOUNT, CR_MOUNT_EQU, CR_MOUNT_ALT, CR_MOUNT_HOR, C
 class Transform {
   public:
     // setup for coordinate transformation
-    void init();
+    void init(uint8_t mountType);
 
     #if DEBUG != OFF
       // prints a coordinate to the debug serial port
@@ -51,7 +51,8 @@ class Transform {
     void observedPlaceToMount(Coordinate *coord);
 
     // converts from Instrument (angular) to Mount (equatorial or horizon) coordinates
-    Coordinate instrumentToMount(double a1, double a2);
+    // Retain lastPierSide within poleTolerance radians of the orientation pole.
+    Coordinate instrumentToMount(double a1, double a2, PierSide lastPierSide = PIER_SIDE_NONE, double poleTolerance = 0.0);
     // converts from Mount (equatorial or horizon) to Instrument (angular) coordinates
     void mountToInstrument(Coordinate *coord, double *a1, double *a2);
 
@@ -95,6 +96,7 @@ class Transform {
     #if ALIGN_MAX_NUM_STARS > 1  
       GeoAlign align;
     #endif
+
     int8_t mountType = MOUNT_SUBTYPE;
     bool meridianFlips;
  

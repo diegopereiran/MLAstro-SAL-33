@@ -2,6 +2,7 @@
 #pragma once
 
 // conversion math
+#define degToArcsecL(x)             ((x)*3600L)
 #define degToRad(x)                 ((x)/(double)RAD_DEG_RATIO)
 #define degToRadF(x)                ((x)/(double)RAD_DEG_RATIO_F)
 #define radToDeg(x)                 ((x)*(double)RAD_DEG_RATIO)
@@ -27,7 +28,129 @@
 #define strequ(str1, str2) (strlen(str1) != strlen(str2) ? 0 : strstr(str1, str2))
 
 // safe string copy from (char*)source to (char *)dest for a destination array of size bytes 
-#define sstrcpy(dest, source, size) for (int i = 0; source[i] && i < size - 1; i++) { dest[i] = source[i]; dest[i + 1] = 0; }
+#define sstrcpy(dest, source) do {                                     \
+  int16_t _cap = sizeof(dest);                                         \
+  if (_cap) {                                                          \
+    int16_t _i = 0;                                                    \
+    for (; _i + 1 < _cap && (source)[_i]; ++_i) {                      \
+      (dest)[_i] = (source)[_i];                                       \
+    }                                                                  \
+    (dest)[_i] = '\0';                                                 \
+  }                                                                    \
+} while (0)
+
+#define sstrcpyex(dest, source, cap) do {                              \
+  if (cap) {                                                           \
+    int16_t _i = 0;                                                    \
+    for (; _i + 1 < cap && (source)[_i]; ++_i) {                       \
+      (dest)[_i] = (source)[_i];                                       \
+    }                                                                  \
+    (dest)[_i] = '\0';                                                 \
+  }                                                                    \
+} while (0)
+
+// safe string append from (char*)source to (char*)dest for a destination array of size bytes
+#define sstrcat(dest, source) do {                                     \
+  int16_t _cap = sizeof(dest);                                         \
+  if (_cap) {                                                          \
+    int16_t _i = 0;                                                    \
+    while (_i < _cap && (dest)[_i]) ++_i;                              \
+    if (_i >= _cap) {                                                  \
+      (dest)[_cap - 1] = '\0';                                         \
+    } else {                                                           \
+      int16_t _j = 0;                                                  \
+      for (; _i + 1 < _cap && (source)[_j]; ++_i, ++_j) {              \
+        (dest)[_i] = (source)[_j];                                     \
+      }                                                                \
+      (dest)[_i] = '\0';                                               \
+    }                                                                  \
+  }                                                                    \
+} while (0)
+
+#define sstrcatex(dest, source, cap) do {                              \
+  int16_t _cap = (cap);                                                \
+  if (_cap) {                                                          \
+    int16_t _i = 0;                                                    \
+    while (_i < _cap && (dest)[_i]) ++_i;                              \
+    if (_i >= _cap) {                                                  \
+      (dest)[_cap - 1] = '\0';                                         \
+    } else {                                                           \
+      int16_t _j = 0;                                                  \
+      for (; _i + 1 < _cap && (source)[_j]; ++_i, ++_j) {              \
+        (dest)[_i] = (source)[_j];                                     \
+      }                                                                \
+      (dest)[_i] = '\0';                                               \
+    }                                                                  \
+  }                                                                    \
+} while (0)
+
+// safe single-character append for a destination array of size bytes
+#define sstrcatc(dest, value) do {                                     \
+  int16_t _cap = sizeof(dest);                                         \
+  if (_cap) {                                                          \
+    int16_t _i = 0;                                                    \
+    while (_i < _cap && (dest)[_i]) ++_i;                              \
+    if (_i >= _cap) {                                                  \
+      (dest)[_cap - 1] = '\0';                                         \
+    } else if (_i + 1 < _cap) {                                        \
+      (dest)[_i] = (value);                                            \
+      (dest)[_i + 1] = '\0';                                           \
+    }                                                                  \
+  }                                                                    \
+} while (0)
+
+#define sstrcatcex(dest, value, cap) do {                              \
+  int16_t _cap = (cap);                                                \
+  if (_cap) {                                                          \
+    int16_t _i = 0;                                                    \
+    while (_i < _cap && (dest)[_i]) ++_i;                              \
+    if (_i >= _cap) {                                                  \
+      (dest)[_cap - 1] = '\0';                                         \
+    } else if (_i + 1 < _cap) {                                        \
+      (dest)[_i] = (value);                                            \
+      (dest)[_i + 1] = '\0';                                           \
+    }                                                                  \
+  }                                                                    \
+} while (0)
+
+// truncate a string so there is room for reserve bytes plus the null terminator
+#define sstrreserve(dest, reserve) do {                                \
+  int16_t _cap = sizeof(dest);                                         \
+  int16_t _reserve = (reserve);                                        \
+  if (_cap) {                                                          \
+    if (_reserve >= _cap) {                                            \
+      (dest)[0] = '\0';                                                \
+    } else {                                                           \
+      int16_t _max = _cap - _reserve - 1;                              \
+      int16_t _i = 0;                                                  \
+      while (_i < _cap && (dest)[_i]) ++_i;                            \
+      if (_i >= _cap) {                                                \
+        (dest)[_cap - 1] = '\0';                                       \
+        _i = _cap - 1;                                                 \
+      }                                                                \
+      if (_i > _max) (dest)[_max] = '\0';                              \
+    }                                                                  \
+  }                                                                    \
+} while (0)
+
+#define sstrreserveex(dest, reserve, cap) do {                         \
+  int16_t _cap = (cap);                                                \
+  int16_t _reserve = (reserve);                                        \
+  if (_cap) {                                                          \
+    if (_reserve >= _cap) {                                            \
+      (dest)[0] = '\0';                                                \
+    } else {                                                           \
+      int16_t _max = _cap - _reserve - 1;                              \
+      int16_t _i = 0;                                                  \
+      while (_i < _cap && (dest)[_i]) ++_i;                            \
+      if (_i >= _cap) {                                                \
+        (dest)[_cap - 1] = '\0';                                       \
+        _i = _cap - 1;                                                 \
+      }                                                                \
+      if (_i > _max) (dest)[_max] = '\0';                              \
+    }                                                                  \
+  }                                                                    \
+} while (0)
 
 // convert string to lower case
 #define strtolower(source) for (int i = 0; source[i]; i++) source[i] = tolower(source[i])
@@ -108,8 +231,8 @@
 #endif
 
 // Fast GPIO read/write for Arduino-ESP32 cores 2.x / 3.x
-// Works across ESP32 / ESP32-S2 / ESP32-S3 / ESP32-C3
-#ifdef ESP32
+// Works across ESP32 / ESP32-S2 / ESP32-S3
+#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S2) || defined(CONFIG_IDF_TARGET_ESP32S3)
   #include "soc/gpio_struct.h"
 
   // SOC_GPIO_PIN_COUNT exists in ESP-IDF-based cores; core 1.x may be missing it.

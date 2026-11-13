@@ -127,7 +127,7 @@ bool StepDirDriver::init() {
     if (axisNumber > 2) pulseWidth = 2000;
 
     if (DriverPulseWidth[driverModel] == OFF) {
-      VF("MSG:"); V(axisPrefix); V(DRIVER_NAME[driverModel]); VF(" min. pulse width unknown!");
+      VF("MSG:"); V(axisPrefix); V(DRIVER_NAME[driverModel]); VLF(" min. pulse width unknown!");
     }
 
     if (DriverPulseWidth[driverModel] > pulseWidth) {
@@ -161,14 +161,16 @@ bool StepDirDriver::init() {
   microstepCodeSlewing = subdivisionsToCode(normalizedMicrostepsSlewing);
 
   if (microstepCode == OFF || microstepCodeSlewing == OFF) {
-    DF("MSG:"); D(axisPrefix); DF("invalid microstep mode for this driver.");
+    DF("MSG:"); D(axisPrefix); DLF("invalid microstep mode for this driver.");
     return false;
   }
 
   microstepRatio = normalizedMicrosteps/normalizedMicrostepsSlewing;
 
-  normalizedDecay = lround(decay.value);
-  normalizedDecaySlewing = lround(decaySlewing.value);
+  // drivers that don't expose decay as a runtime parameter (e.g. StepDirGeneric) never set decay.value,
+  // fall back to the compile-time default instead of lround(NAN)
+  normalizedDecay = lround(isnan(decay.value) ? decay.valueDefault : decay.value);
+  normalizedDecaySlewing = lround(isnan(decaySlewing.value) ? decaySlewing.valueDefault : decaySlewing.value);
 
   // automatically set fault status for known drivers
   if (statusMode == ON) {

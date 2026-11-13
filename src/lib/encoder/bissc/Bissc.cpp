@@ -4,6 +4,22 @@
 
 #ifdef HAS_BISS_C
 
+#if BISSC_SAMPLE_IN_LOW_PHASE == ON
+  #define BISSC_SAMPLE_LOW_AND_READ(sampleAction) \
+    delayNanoseconds(tSample);                    \
+    sampleAction;                                \
+    delayNanoseconds(rate - tSample);            \
+    digitalWriteF(maPin, HIGH_MA);               \
+    delayNanoseconds(rate)
+#else
+  #define BISSC_SAMPLE_LOW_AND_READ(sampleAction) \
+    delayNanoseconds(rate - tSample);             \
+    digitalWriteF(maPin, HIGH_MA);                \
+    delayNanoseconds(tSample);                    \
+    sampleAction;                                 \
+    delayNanoseconds(rate - tSample)
+#endif
+
 // get device ready for use
 bool Bissc::init() {
   if (ready) return true;
@@ -17,6 +33,11 @@ bool Bissc::init() {
   // get the counts/mask ready
   encoderCounts = (uint32_t)(1UL << encoderBits);
   encoderHalfCounts = (int32_t)(encoderCounts >> 1);
+  encoderCountsPerTurn = encoderCounts;
+  #ifdef BISSC_RESOLUTION_DIVISOR
+    encoderCountsPerTurn /= BISSC_RESOLUTION_DIVISOR;
+  #endif
+  encoderHalfCountsPerTurn = encoderCountsPerTurn >> 1;
 
   const uint8_t lowTurnBits = (encoderBits >= 32) ? 0 : (uint8_t)(32U - encoderBits);
   encoderMultiTurnMask = (lowTurnBits >= 32) ? 0xFFFFFFFFUL : ((1UL << lowTurnBits) - 1UL);
@@ -67,6 +88,11 @@ void Bissc::setOrigin(int32_t counts) {
   }
   VLF("----------------------------------------------------------------------------------------");
 
+  // origin changes establish a new absolute range
+  countTurns = 0;
+  firstCall = true;
+  lastValidTime = millis() - 3U;
+
   index = temp;
 }
 
@@ -102,6 +128,32 @@ int32_t Bissc::getCountWithErrorRecovery(bool immediate) {
   if (immediate || now - lastValidTime > 2) {
     uint32_t newCount = 0;
     if (getCount(newCount)) {
+
+      if (BISSC_SINGLE_TURN == ON || encoderMultiTurnBits == 0) {
+
+        // count wraps forward and reverse
+        int32_t countSingleTurn = (int32_t)newCount;
+        if (!firstCall) {
+          if (countSingleTurn < lastCountSingleTurn) {
+            uint32_t delta = (uint32_t)lastCountSingleTurn - (uint32_t)countSingleTurn;
+            if (delta > encoderHalfCountsPerTurn) countTurns++;
+          } else
+          if (countSingleTurn > lastCountSingleTurn) {
+            uint32_t delta = (uint32_t)countSingleTurn - (uint32_t)lastCountSingleTurn;
+            if (delta > encoderHalfCountsPerTurn) countTurns--;
+          }
+        }
+        firstCall = false;
+
+        lastCountSingleTurn = countSingleTurn;
+        newCount = (uint32_t)countSingleTurn + (uint32_t)countTurns*encoderCountsPerTurn;
+
+        #if BISSC_SINGLE_TURN_STRICT == ON
+          // flag error if encoder is outside absolute range
+          if (countTurns != 0) error = ENCODER_ERROR_COUNT_THRESHOLD + 1;
+        #endif
+      }
+
       lastValidTime = now;
       lastValidCount = newCount;
 
@@ -210,11 +262,7 @@ IRAM_ATTR void Bissc::getCountBitBang(uint32_t &count) {
   // sync phase
   for (int i = 0; i < BISSC_SYNC_PHASE; i++) {
     digitalWriteF(maPin, LOW_MA);
-    delayNanoseconds(tSample);
-    if (digitalReadF(sloPin) == LOW_SLO) foundAck = true;
-    delayNanoseconds(rate - tSample);
-    digitalWriteF(maPin, HIGH_MA);
-    delayNanoseconds(rate);
+    BISSC_SAMPLE_LOW_AND_READ(if (digitalReadF(sloPin) == LOW_SLO) foundAck = true);
     if (foundAck) break;
   }
 
@@ -222,22 +270,14 @@ IRAM_ATTR void Bissc::getCountBitBang(uint32_t &count) {
   if (foundAck) {
     for (int i = 0; i < BISSC_ACK_PHASE; i++) {
       digitalWriteF(maPin, LOW_MA);
-      delayNanoseconds(tSample);
-      if (digitalReadF(sloPin) == HIGH_SLO) foundStart = true;
-      delayNanoseconds(rate - tSample);
-      digitalWriteF(maPin, HIGH_MA);
-      delayNanoseconds(rate);
+      BISSC_SAMPLE_LOW_AND_READ(if (digitalReadF(sloPin) == HIGH_SLO) foundStart = true);
       if (foundStart) break;
     }
 
     // if we have an Start
     if (foundStart) {
       digitalWriteF(maPin, LOW_MA);
-      delayNanoseconds(tSample);
-      if (digitalReadF(sloPin) == LOW_SLO) foundCds = true;
-      delayNanoseconds(rate - tSample);
-      digitalWriteF(maPin, HIGH_MA);
-      delayNanoseconds(rate);
+      BISSC_SAMPLE_LOW_AND_READ(if (digitalReadF(sloPin) == LOW_SLO) foundCds = true);
 
       // if we have an Cds, read the data
       if (foundCds) {
@@ -245,47 +285,27 @@ IRAM_ATTR void Bissc::getCountBitBang(uint32_t &count) {
         // the first n bits are the multi-turn count
         for (int i = 1; i <= encoderMultiTurnBits; i++) {
           digitalWriteF(maPin, LOW_MA);
-          delayNanoseconds(tSample);
-          if (digitalReadF(sloPin) == HIGH_SLO) bitSet(turns, encoderMultiTurnBits - i);
-          delayNanoseconds(rate - tSample);
-          digitalWriteF(maPin, HIGH_MA);
-          delayNanoseconds(rate);
+          BISSC_SAMPLE_LOW_AND_READ(if (digitalReadF(sloPin) == HIGH_SLO) bitSet(turns, encoderMultiTurnBits - i));
         }
-        
+
         // the next n bits are the encoder absolute count
         for (int i = 1; i <= encoderBits; i++) {
           digitalWriteF(maPin, LOW_MA);
-          delayNanoseconds(tSample);
-          if (digitalReadF(sloPin) == HIGH_SLO) bitSet(count, encoderBits - i);
-          delayNanoseconds(rate - tSample);
-          digitalWriteF(maPin, HIGH_MA);
-          delayNanoseconds(rate);
+          BISSC_SAMPLE_LOW_AND_READ(if (digitalReadF(sloPin) == HIGH_SLO) bitSet(count, encoderBits - i));
         }
 
         // the Err bit
         digitalWriteF(maPin, LOW_MA);
-        delayNanoseconds(tSample);
-        nErr = (digitalReadF(sloPin) == HIGH_SLO);
-        delayNanoseconds(rate - tSample);
-        digitalWriteF(maPin, HIGH_MA);
-        delayNanoseconds(rate);
+        BISSC_SAMPLE_LOW_AND_READ(nErr = (digitalReadF(sloPin) == HIGH_SLO));
 
         // the Wrn bit
         digitalWriteF(maPin, LOW_MA);
-        delayNanoseconds(tSample);
-        nWrn = (digitalReadF(sloPin) == HIGH_SLO);
-        delayNanoseconds(rate - tSample);
-        digitalWriteF(maPin, HIGH_MA);
-        delayNanoseconds(rate);
+        BISSC_SAMPLE_LOW_AND_READ(nWrn = (digitalReadF(sloPin) == HIGH_SLO));
 
         // the last 6 bits are the CRC
         for (int i = 0; i < 6; i++) {
           digitalWriteF(maPin, LOW_MA);
-          delayNanoseconds(tSample);
-          if (digitalReadF(sloPin) == HIGH_SLO) bitSet(frameCrc, 5 - i);
-          delayNanoseconds(rate - tSample);
-          digitalWriteF(maPin, HIGH_MA);
-          delayNanoseconds(rate);
+          BISSC_SAMPLE_LOW_AND_READ(if (digitalReadF(sloPin) == HIGH_SLO) bitSet(frameCrc, 5 - i));
         }
       }
     }

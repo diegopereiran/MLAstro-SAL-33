@@ -18,33 +18,15 @@ extern volatile unsigned long fracLAST;
 
 #if DEBUG != OFF
   void Transform::print(Coordinate *coord) {
+    UNUSED(coord);
     VF("(a="); V(radToDeg(coord->a)); VF(", z="); V(radToDeg(coord->z));
     VF("), (r="); V(radToDeg(coord->r)); VF(", h="); V(radToDeg(coord->h)); VF(", d="); V(radToDeg(coord->d));
     VF("), pierSide="); VL(coord->pierSide);
   }
 #endif
 
-void Transform::init() {
-  // NV_AXIS_SETTINGS_REVERT bit 0 = settings at compile (0) or run time (1), bits 1 to 9 = reset axis n on next boot
-  bool revert = !(nv.readUI(NV_AXIS_SETTINGS_REVERT) & 1);
-
-  // write axis settings to NV
-  if (!nv.hasValidKey() || revert) {
-    nv.write(NV_MOUNT_TYPE_BASE, (uint8_t)MOUNT_SUBTYPE);
-  }
-  mountType = nv.readUC(NV_MOUNT_TYPE_BASE);
-  if (mountType == 0) {
-    mountType = MOUNT_SUBTYPE;
-    nv.write(NV_MOUNT_TYPE_BASE, (uint8_t)MOUNT_SUBTYPE);
-    VLF("MSG: Transform, revert mount type to default");
-  } else
-  if (mountType < MOUNT_SUBTYPE_FIRST || mountType > MOUNT_SUBTYPE_LAST) {
-    mountType = MOUNT_SUBTYPE;
-    initError.value = true;
-    VLF("WRN: Transform, unknown mount type reverting to default");
-  }
-
-  if (MOUNT_TYPE == ALTALT) mountType = MOUNT_SUBTYPE;
+void Transform::init(uint8_t mountType) {
+  this->mountType = mountType;
 
   #if DEBUG == VERBOSE
     const char* MountTypeStr[5] = {"", "GEM", "FORK", "ALTAZM", "ALTALT"};
@@ -101,7 +83,12 @@ void Transform::nativeToMount(Coordinate *coord, double *a1, double *a2) {
 
 void Transform::mountToTopocentric(Coordinate *coord) {
   mountToObservedPlace(coord);
+  // Alt/Alt model corrections update aa1/aa2; refraction operates on h/d.
+  if (mountType == ALTALT) aaToEqu(coord);
+
   observedPlaceToTopocentric(coord);
+  // Keep the Alt/Alt coordinates consistent with the corrected h/d.
+  if (mountType == ALTALT) equToAa(coord);
 }
 
 void Transform::mountToObservedPlace(Coordinate *coord) {
@@ -161,21 +148,31 @@ void Transform::topocentricToObservedPlace(Coordinate *coord) {
   } else coord->a += trueRefrac(coord->a);
 }
 
-Coordinate Transform::instrumentToMount(double a1, double a2) {
-  Coordinate mount;
+Coordinate Transform::instrumentToMount(double a1, double a2, PierSide lastPierSide, double poleTolerance) {
+  Coordinate mount = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, PIER_SIDE_NONE};
 
   #if AXIS2_TANGENT_ARM_CORRECTION == ON
     a2 = TANGENT_ARM_INSTRUMENT_TO_MOUNT(a2)
   #endif
 
   if (site.location.latitude >= 0.0 || mountType == ALTAZM) {
-    if (a2 > Deg90) {
+    bool west = a2 > Deg90;
+    if (fabs(a2 - (double)Deg90) <= poleTolerance && (lastPierSide == PIER_SIDE_EAST || lastPierSide == PIER_SIDE_WEST)) {
+      a2 = (double)Deg90;
+      west = lastPierSide == PIER_SIDE_WEST;
+    }
+    if (west) {
       mount.pierSide = PIER_SIDE_WEST;
       a1 -= Deg180;
       a2  = Deg180 - a2;
     } else mount.pierSide = PIER_SIDE_EAST;
   } else {
-    if (a2 < -Deg90) {
+    bool west = a2 < -Deg90;
+    if (fabs(a2 + (double)Deg90) <= poleTolerance && (lastPierSide == PIER_SIDE_EAST || lastPierSide == PIER_SIDE_WEST)) {
+      a2 = -(double)Deg90;
+      west = lastPierSide == PIER_SIDE_WEST;
+    }
+    if (west) {
       mount.pierSide = PIER_SIDE_WEST;
       a1 -= Deg180;
       a2  = (-Deg180) - a2;

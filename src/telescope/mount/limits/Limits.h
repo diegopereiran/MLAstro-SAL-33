@@ -24,16 +24,21 @@
 
 #pragma pack(1)
 typedef struct AltitudeLimits {
-  float min;
-  float max;
+  float min; // in radians
+  float max; // in radians
 } AltitudeLimits;
 
-#define LimitSettingsSize 16
 typedef struct LimitSettings {
   AltitudeLimits altitude;
-  float pastMeridianE;
-  float pastMeridianW;
+  float pastMeridianE; // in radians
+  float pastMeridianW; // in radians
 } LimitSettings;
+
+typedef struct SyncLimitSettings {
+  float pole;  // maximum |Dec| in degrees, or OFF; 90 is unlimited
+  float axis1; // degrees, or OFF
+  float axis2; // degrees, or OFF
+} SyncLimitSettings;
 #pragma pack()
 
 typedef struct MerdianError {
@@ -62,14 +67,21 @@ class Limits {
   public:
     void init();
 
-    bool command(char *reply, char *command, char *parameter, bool *suppressFrame, bool *numericReply, CommandError *commandError);
+    inline float getSyncPoleLimit() { return syncSettings.pole == OFF ? 90.0F : syncSettings.pole; }
+    inline bool hasSyncAxisLimits() { return syncSettings.axis1 != OFF || syncSettings.axis2 != OFF; }
 
-    // constrain meridian limits to the allowed range
-    void constrainMeridianLimits();
+    bool command(char *reply, char *command, char *parameter, bool *suppressFrame, bool *numericReply, CommandError *commandError);
 
     // target coordinate check ahead of sync, goto, etc.
     CommandError validateTarget(Coordinate *coords, bool isGoto);
     CommandError validateTarget(Coordinate *coords, bool *eastReachable, bool *westReachable, double *eastCorrection, double *westCorrection, bool isGoto);
+
+    // validate sync/align declination in radians against the pole limit
+    CommandError validateSyncPole(double declination);
+
+    // validate and apply an instrument coordinate change for a mount axis
+    CommandError validateInstrumentCoordinate(uint8_t axisNumber, double value, bool bypass = false);
+    CommandError setInstrumentCoordinate(uint8_t axisNumber, double value, bool bypass = false);
 
     // true if an limit related error is exists
     bool isError();
@@ -83,8 +95,14 @@ class Limits {
     // true if an above overhead limit
     inline bool isAboveOverhead() { return error.altitude.max; }
 
+    // true if past meridian limit east
+    inline bool isPastMeridianE() { return error.meridian.east; }
+
     // true if past meridian limit west
     inline bool isPastMeridianW() { return error.meridian.west; }
+
+    // true if past the axis1 min limit
+    inline bool isPastAxis1Min() { return error.limit.axis1.min; }
 
     // true if past the axis1 max limit
     inline bool isPastAxis1Max() { return error.limit.axis1.max; } 
@@ -95,8 +113,14 @@ class Limits {
     // enable or disable limit enforcement
     inline void enabled(bool state) { limitsEnabled = state; }
 
-    // check if limits are being enforced
+    // check if limits are enabled
     inline bool isEnabled() { return limitsEnabled; }
+
+    // check if the limits state permits motion
+    inline bool isMotionAllowed() { return limitsEnabled || !hasSoftwareLimits(); }
+
+    // software limits apply to normal mounts; physical limit switches always apply
+    inline bool hasSoftwareLimits() { return true; }
 
     // disable meridian limits for the specified period in seconds
     void limitsDisablePeriod(float seconds) { limitsDisablePeriodDs = lroundf(seconds*10.0F); }
@@ -116,6 +140,10 @@ class Limits {
     LimitsError error;
 
     int limitsDisablePeriodDs = 0; // in deciseconds (0.1s)
+
+    uint32_t nvKey;
+    SyncLimitSettings syncSettings = {SYNC_POLE_LIMIT, AXIS1_LIMIT_SYNC, AXIS2_LIMIT_SYNC};
+    uint32_t syncNvKey;
 };
 
 extern Limits limits;

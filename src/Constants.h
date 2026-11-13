@@ -85,6 +85,11 @@
 #define ASTROMETRIC_J2000           4
 #define MOUNT_COORDS_LAST           4
 
+// STARTUP AUTHORITY MODE
+#define SA_STRICT                   1
+#define SA_AUTO                     2
+#define SA_PERMISSIVE               3
+
 // TIME LOCATION SOURCE devices supported
 #define TLS_FIRST                   1
 #define DS3231                      1      // DS3231 RTC on I2C
@@ -100,7 +105,12 @@
 #define EAST                        1      // same as PSS_EAST
 #define WEST                        2      // same as PSS_WEST
 #define BEST                        3      // same as PSS_BEST
-#define PIER_SIDE_LAST              3
+#define AUTOMATIC                   4      // same as PSS_AUTO
+#define PIER_SIDE_LAST              4
+
+// MERIDIAN FLIP HOME MODE
+#define VISIT                       1      // visit home, then continue
+#define PAUSE                       2      // visit home and pause until continued
 
 // COMPENSATED TRACKING
 #define COMPENSATED_TRACKING_FIRST  1
@@ -139,9 +149,9 @@
 #define TASKS_MAX                   60     // up to 60 tasks
 #define TASKS_SKIP_MISSED                  // just skip missed tasks if too late
 #ifdef ESP32
-  #define TASKS_HWTIMERS             4     // up to 4 hardware timers
+  #define TASKS_HWTIMERS            4      // up to 4 hardware timers
 #else
-  #define TASKS_HWTIMERS             3
+  #define TASKS_HWTIMERS            3
 #endif
 
 // default start of axis class hardware timers
@@ -152,31 +162,6 @@
 #define SERIAL_ST4_SERVER_PRESENT
 
 // NV -------------------------------------------------------------------------------------------------------------------
-#define INIT_NV_KEY                 583928945UL
 
-#define NV_KEY                      0      // bytes: 4   , 4
-#define NV_SITE_NUMBER              4      // bytes: 1   , 1
-#define NV_SITE_BASE                5      // bytes: 40*4, 160
-#define NV_SITE_JD_BASE             165    // bytes: 16  , 16
-
-#define NV_MOUNT_SETTINGS_BASE      181    // bytes: 9   , 9
-#define NV_MOUNT_TYPE_BASE          190    // bytes: 1   , 1
-#define NV_MOUNT_GOTO_BASE          191    // bytes: 6   , 6
-#define NV_MOUNT_GUIDE_BASE         197    // bytes: 3   , 3
-#define NV_MOUNT_LIMITS_BASE        200    // bytes: 16  , 16
-#define NV_MOUNT_HOME_BASE          216    // bytes: 11 ,  11
-#define NV_MOUNT_PARK_BASE          227    // bytes: 15  , 15
-#define NV_MOUNT_PEC_BASE           242    // bytes: 6   , 6
-#define NV_MOUNT_STATUS_BASE        248    // bytes: 1   , 1
-#define NV_MOUNT_LAST_POSITION      249    // bytes: 9   , 9
-
-#define NV_ALIGN_MODEL_BASE         258    // bytes: 48  , 48
-#define NV_AXIS_SETTINGS_REVERT     306    // bytes: 2   , 2
-#define NV_AXIS_SETTINGS_BASE       308    // bytes: 76*9, 684
-#define NV_AXIS_ENCODER_ZERO_BASE   992    // bytes: 4 *2, 8
-#define NV_FOCUSER_SETTINGS_BASE    1000   // bytes: 20*6, 120
-#define NV_ROTATOR_SETTINGS_BASE    1003   // bytes: 11  , 11
-#define NV_FEATURE_SETTINGS_BASE    1014   // bytes: 5 *8, 40
-#define NV_TELESCOPE_SETTINGS_BASE  1054   // bytes: 2   , 2
-
-#define NV_LAST                     1055
+// unique volume signature for this volume/partition layout
+#define NV_VOLUME_SIGNATURE         0x0001u

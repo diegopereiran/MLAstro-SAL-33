@@ -10,6 +10,7 @@
 #include "../limits/Limits.h"
 #include "../park/Park.h"
 #include "../site/Site.h"
+#include "../startupAuthority/StartupAuthority.h"
 
 bool Home::command(char *reply, char *command, char *parameter, bool *suppressFrame, bool *numericReply, CommandError *commandError) {
   UNUSED(reply);
@@ -30,7 +31,8 @@ bool Home::command(char *reply, char *command, char *parameter, bool *suppressFr
         case '1': settings.automaticAtBoot = true; break;
         default: *commandError = CE_PARAM_RANGE; break;
       }
-      nv.writeBytes(NV_MOUNT_HOME_BASE, &settings, sizeof(Settings));
+      nv().kv().put(nvKey, settings);
+
       *numericReply = false;
     } else
 
@@ -50,11 +52,11 @@ bool Home::command(char *reply, char *command, char *parameter, bool *suppressFr
         setReversal();
       } else {
         long l = atol(&parameter[2]);
-        if (l >= -648000 || l <= 648000) {
+        if (l >= -degToArcsecL(180L) && l <= degToArcsecL(180L)) {
           settings.axis1.senseOffset = l;
         } else *commandError = CE_PARAM_RANGE;
       }
-      nv.writeBytes(NV_MOUNT_HOME_BASE, &settings, sizeof(Settings));
+      nv().kv().put(nvKey, settings);
       *numericReply = false;
     } else
 
@@ -67,11 +69,11 @@ bool Home::command(char *reply, char *command, char *parameter, bool *suppressFr
         setReversal();
       } else {
         long l = atol(&parameter[2]);
-        if (l >= -648000 || l <= 648000) {
+        if (l >= -degToArcsecL(180L) && l <= degToArcsecL(180L)) {
           settings.axis2.senseOffset = l;
         } else *commandError = CE_PARAM_RANGE;
       }
-      nv.writeBytes(NV_MOUNT_HOME_BASE, &settings, sizeof(Settings));
+      nv().kv().put(nvKey, settings);
       *numericReply = false;
     } else
 
@@ -81,7 +83,7 @@ bool Home::command(char *reply, char *command, char *parameter, bool *suppressFr
     if (command[1] == 'F' && parameter[0] == 0) {
       *commandError = reset(true);
       park.reset();
-      limits.enabled(site.isDateTimeReady());
+      limits.enabled(site.isDateTimeReady() && startupAuthority.trusted());
       *numericReply = false;
     } else return false;
 

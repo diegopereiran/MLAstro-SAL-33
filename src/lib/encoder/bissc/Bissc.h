@@ -17,6 +17,12 @@
     #define BISSC_SINGLE_TURN ON
   #endif
 
+  // flag error if encoder is outside absolute range
+  // this applies to forced single turn mode and encoders that are inherently single turn
+  #ifndef BISSC_SINGLE_TURN_STRICT
+    #define BISSC_SINGLE_TURN_STRICT ON
+  #endif
+
   // default sync phase
   #ifndef BISSC_SYNC_PHASE
     #define BISSC_SYNC_PHASE 20
@@ -25,6 +31,31 @@
   // default ack phase
   #ifndef BISSC_ACK_PHASE
     #define BISSC_ACK_PHASE 20
+  #endif
+
+  // sample during the low phase after LOW_MA
+  #ifndef BISSC_SAMPLE_IN_LOW_PHASE
+    #define BISSC_SAMPLE_IN_LOW_PHASE ON
+  #endif
+
+  // sample during the high phase after HIGH_MA
+  #ifndef BISSC_SAMPLE_IN_HIGH_PHASE
+    #define BISSC_SAMPLE_IN_HIGH_PHASE OFF
+  #endif
+
+  // sample point within the selected half-clock phase, in quarter-cycle steps (2 is mid-cycle and default)
+  #ifndef BISSC_TSAMPLE_QUARTERS
+    #define BISSC_TSAMPLE_QUARTERS 2
+  #endif
+
+  #if BISSC_SAMPLE_IN_LOW_PHASE == BISSC_SAMPLE_IN_HIGH_PHASE
+    #error "Configuration (Config.h): Set exactly one of BISSC_SAMPLE_IN_LOW_PHASE or BISSC_SAMPLE_IN_HIGH_PHASE to ON"
+  #endif
+  #if BISSC_TSAMPLE_QUARTERS < 1
+    #error "Configuration (Config.h): BISSC_TSAMPLE_QUARTERS must be >= 1"
+  #endif
+  #if BISSC_TSAMPLE_QUARTERS > 3
+    #error "Configuration (Config.h): BISSC_TSAMPLE_QUARTERS must be between 1 and 3"
   #endif
 
   // resolution adjustment use 2, 4, or 8 (example:)
@@ -48,6 +79,8 @@
     public:
       // get device ready for use
       bool init();
+
+      bool isAbsolute() const override { return true; }
 
       // set encoder origin
       void setOrigin(int32_t counts);
@@ -82,11 +115,17 @@
 
       uint32_t turns = 0;
 
+      int32_t lastCountSingleTurn = 0;
+      int32_t countTurns = 0;
+      bool firstCall = true;
+
       // this design allows for 8 to 31 bit encoders
       char encoderName[16] = {0};
       uint8_t encoderBits = 0;
       uint32_t encoderCounts = 0;
       int32_t encoderHalfCounts = 0;
+      uint32_t encoderCountsPerTurn = 0;
+      uint32_t encoderHalfCountsPerTurn = 0;
       uint8_t encoderMultiTurnBits = 0;
       uint32_t encoderMultiTurnMask = 0;
       bool encoderWrnInvert = true;
@@ -98,7 +137,7 @@
 
       // bit delay in nanoseconds
       const uint32_t rate = 500000/BISSC_CLOCK_RATE_KHZ;
-      const uint32_t tSample = (500000/BISSC_CLOCK_RATE_KHZ) >> 2;
+      const uint32_t tSample = (rate*BISSC_TSAMPLE_QUARTERS)/4;
 
       int16_t maPin;
       int16_t sloPin;

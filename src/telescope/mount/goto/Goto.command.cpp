@@ -15,6 +15,10 @@
 #include "../limits/Limits.h"
 #include "../status/Status.h"
 
+#if ALIGN_MAX_NUM_STARS > 1
+#include "../coordinates/Align.bounds.h"
+#endif
+
 bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFrame, bool *numericReply, CommandError *commandError) {
   PrecisionMode precisionMode = PM_HIGH;
 
@@ -184,31 +188,31 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
           static int star = 0;
           *numericReply = false;
           switch (parameter[1]) {
-            case '0': sprintf(reply,"%ld",(long)round((radToArcsec(transform.align.model.ax1Cor)))); break; // ax1Cor
-            case '1': sprintf(reply,"%ld",(long)round((radToArcsec(transform.align.model.ax2Cor)))); break; // ax2Cor
-            case '2': sprintf(reply,"%ld",(long)round((radToArcsec(transform.align.model.altCor)))); break; // altCor
-            case '3': sprintf(reply,"%ld",(long)round((radToArcsec(transform.align.model.azmCor)))); break; // azmCor
-            case '4': sprintf(reply,"%ld",(long)round((radToArcsec(transform.align.model.doCor))));  break; // doCor
-            case '5': sprintf(reply,"%ld",(long)round((radToArcsec(transform.align.model.pdCor))));  break; // pdCor
+            case '0': sprintf(reply, "%ld",(long)round((radToArcsec(transform.align.model.ax1Cor)))); break; // ax1Cor
+            case '1': sprintf(reply, "%ld",(long)round((radToArcsec(transform.align.model.ax2Cor)))); break; // ax2Cor
+            case '2': sprintf(reply, "%ld",(long)round((radToArcsec(transform.align.model.altCor)))); break; // altCor
+            case '3': sprintf(reply, "%ld",(long)round((radToArcsec(transform.align.model.azmCor)))); break; // azmCor
+            case '4': sprintf(reply, "%ld",(long)round((radToArcsec(transform.align.model.doCor))));  break; // doCor
+            case '5': sprintf(reply, "%ld",(long)round((radToArcsec(transform.align.model.pdCor))));  break; // pdCor
             case '6': if (transform.mountType == FORK || transform.mountType == ALTAZM)                     // ffCor
-              sprintf(reply,"%ld",(long)(round(radToArcsec(transform.align.model.dfCor)))); else sprintf(reply,"%ld",(long)(0));
+              sprintf(reply, "%ld",(long)(round(radToArcsec(transform.align.model.dfCor)))); else sprintf(reply, "%ld",(long)(0));
             break;
             case '7': if (transform.mountType != FORK && transform.mountType != ALTAZM)                     // dfCor
-              sprintf(reply,"%ld",(long)(round(radToArcsec(transform.align.model.dfCor)))); else sprintf(reply,"%ld",(long)(0));
+              sprintf(reply, "%ld",(long)(round(radToArcsec(transform.align.model.dfCor)))); else sprintf(reply, "%ld",(long)(0));
             break;
-            case '8': sprintf(reply,"%ld",(long)(round(radToArcsec(transform.align.model.tfCor)))); break;  // tfCor
-            case 'a': sprintf(reply,"%ld",(long)(round(radToDeg(transform.align.model.hcp)))); break;       // hcp
-            case 'b': sprintf(reply,"%ld",(long)(round(radToArcsec(transform.align.model.hca)))); break;    // hca
-            case 'c': sprintf(reply,"%ld",(long)(round(radToDeg(transform.align.model.dcp)))); break;       // dcp
-            case 'd': sprintf(reply,"%ld",(long)(round(radToArcsec(transform.align.model.dca)))); break;    // dca
+            case '8': sprintf(reply, "%ld",(long)(round(radToArcsec(transform.align.model.tfCor)))); break;  // tfCor
+            case 'a': sprintf(reply, "%ld",(long)(round(radToDeg(transform.align.model.hcp)))); break;       // hcp
+            case 'b': sprintf(reply, "%ld",(long)(round(radToArcsec(transform.align.model.hca)))); break;    // hca
+            case 'c': sprintf(reply, "%ld",(long)(round(radToDeg(transform.align.model.dcp)))); break;       // dcp
+            case 'd': sprintf(reply, "%ld",(long)(round(radToArcsec(transform.align.model.dca)))); break;    // dca
             // number of stars, reset to first star
-            case '9': { int n = 0; if (alignState.currentStar > alignState.lastStar) n = alignState.lastStar; sprintf(reply,"%ld",(long)(n)); star = 0; } break;
+            case '9': { int n = 0; if (alignState.currentStar > alignState.lastStar) n = alignState.lastStar; sprintf(reply, "%ld",(long)(n)); star = 0; } break;
             case 'A': { convert.doubleToHms(reply,radToHrs(transform.align.actual[star].h),true,PM_HIGH); } break;
             case 'B': { convert.doubleToDms(reply,radToDeg(transform.align.actual[star].d),false,true,PM_HIGH); } break;
             case 'C': { convert.doubleToHms(reply,radToHrs(transform.align.mount[star].h),true,PM_HIGH); } break;
             case 'D': { convert.doubleToDms(reply,radToDeg(transform.align.mount[star].d),false,true,PM_HIGH); } break;
             // pier side (and increment n)
-            case 'E': sprintf(reply,"%ld",(long)(transform.align.mount[star].side)); star++; break;
+            case 'E': sprintf(reply, "%ld",(long)(transform.align.mount[star].side)); star++; break;
             default: *numericReply = true; *commandError = CE_CMD_UNKNOWN;
           }
         } else
@@ -227,7 +231,7 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
           // autoMeridianFlip
           case '5': sprintf(reply, "%d", (int)isAutoFlipEnabled()); break;
           // preferred pier side
-          case '6': reply[0] = transform.meridianFlips ? "EWB"[settings.preferredPierSide - 1] : 'E'; reply[1] = 0; break;
+          case '6': reply[0] = transform.meridianFlips ? "EWBA"[settings.preferredPierSide - 1] : 'E'; reply[1] = 0; break;
           // current step rate in deg/s
           case '7': sprintF(reply, "%0.1f", (1000000.0F/settings.usPerStepCurrent)/degToRadF(axis1.getStepsPerMeasure())); break;
           // fastest step rate in us/step
@@ -396,26 +400,28 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
         if (parameter[0] == '0') {
           static int star;
           double d;
+          GeoAlign &align = transform.align;
+          const char *value = &parameter[3];
           switch (parameter[1]) {
-            case '0': transform.align.model.ax1Cor = arcsecToRad(atol(&parameter[3])); break; // ax1Cor
-            case '1': transform.align.model.ax2Cor = arcsecToRad(atol(&parameter[3])); break; // ax2Cor 
-            case '2': transform.align.model.altCor = arcsecToRad(atol(&parameter[3])); break; // altCor
-            case '3': transform.align.model.azmCor = arcsecToRad(atol(&parameter[3])); break; // azmCor
-            case '4': transform.align.model.doCor = arcsecToRad(atol(&parameter[3])); break;  // doCor
-            case '5': transform.align.model.pdCor = arcsecToRad(atol(&parameter[3])); break;  // pdCor
+            case '0': *commandError = align.setCoefficient(align.model.ax1Cor, value, AlignBounds::index); break; // ax1Cor
+            case '1': *commandError = align.setCoefficient(align.model.ax2Cor, value, AlignBounds::index); break; // ax2Cor
+            case '2': *commandError = align.setCoefficient(align.model.altCor, value, AlignBounds::polar); break; // altCor
+            case '3': *commandError = align.setCoefficient(align.model.azmCor, value, AlignBounds::polar); break; // azmCor
+            case '4': *commandError = align.setCoefficient(align.model.doCor, value, AlignBounds::cone); break;   // doCor
+            case '5': *commandError = align.setCoefficient(align.model.pdCor, value, AlignBounds::ortho); break;  // pdCor
             case '6':
-              if (transform.mountType == FORK || transform.mountType == ALTAZM)               // fdCor or ffCor
-                transform.align.model.dfCor = arcsecToRad(atol(&parameter[3]));
+              if (transform.mountType == FORK || transform.mountType == ALTAZM) // fdCor or ffCor
+                *commandError = align.setCoefficient(align.model.dfCor, value, AlignBounds::axisFlex);
             break;
             case '7':
-              if (transform.mountType != FORK && transform.mountType != ALTAZM)               // fdCor or ffCor
-                transform.align.model.dfCor = arcsecToRad(atol(&parameter[3]));                 
+              if (transform.mountType != FORK && transform.mountType != ALTAZM) // fdCor or ffCor
+                *commandError = align.setCoefficient(align.model.dfCor, value, AlignBounds::axisFlex);
             break;
-            case '8': transform.align.model.tfCor = arcsecToRad(atol(&parameter[3])); break;  // tfCor
-            case 'a': transform.align.model.hcp = degToRad(atol(&parameter[3])); break;       // hcp
-            case 'b': transform.align.model.hca = arcsecToRad(atol(&parameter[3])); break;    // hca
-            case 'c': transform.align.model.dcp = degToRad(atol(&parameter[3])); break;       // dcp
-            case 'd': transform.align.model.dca = arcsecToRad(atol(&parameter[3])); break;    // dca
+            case '8': *commandError = align.setCoefficient(align.model.tfCor, value, AlignBounds::tubeFlex); break;  // tfCor
+            case 'a': *commandError = align.setCoefficient(align.model.hcp, value, AlignBounds::phase, true); break; // hcp
+            case 'b': *commandError = align.setCoefficient(align.model.hca, value, AlignBounds::harmonic); break;    // hca
+            case 'c': *commandError = align.setCoefficient(align.model.dcp, value, AlignBounds::phase, true); break; // dcp
+            case 'd': *commandError = align.setCoefficient(align.model.dca, value, AlignBounds::harmonic); break;    // dca
             // use :SX09,0# to start upload of stars for align, when done use :SX09,1# to calculate the pointing model, or :SX09,2# to force model activation
             case '9': {
                 int n = atol(&parameter[3]);
@@ -499,7 +505,7 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
               if (settings.usPerStepCurrent > usPerStepBase*2.0) settings.usPerStepCurrent = usPerStepBase*2.0;
               if (settings.usPerStepCurrent < usPerStepLowerLimit()) settings.usPerStepCurrent = usPerStepLowerLimit();
               if (GOTO_FEATURE == OFF) settings.usPerStepCurrent = usPerStepBase; // force base rate
-              nv.updateBytes(NV_MOUNT_GOTO_BASE, &settings, sizeof(GotoSettings));
+              nv().kv().put(nvKey, settings);
               updateAccelerationRates();
             } else *commandError = CE_SLEW_IN_MOTION;
           break;
@@ -509,7 +515,7 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
             if (state == GS_NONE && guide.state == GU_NONE) {
               switch (parameter[3]) {
                 case '5': settings.usPerStepCurrent = usPerStepBase*2.0; break; // 50%
-                case '4': settings.usPerStepCurrent = usPerStepBase*1.5; break; // 75%
+                case '4': settings.usPerStepCurrent = usPerStepBase*1.5; break; // 66.7% (2/3x)
                 case '3': settings.usPerStepCurrent = usPerStepBase;     break; // 100%
                 case '2': settings.usPerStepCurrent = usPerStepBase/1.5; break; // 150%
                 case '1': settings.usPerStepCurrent = usPerStepBase/2.0; break; // 200%
@@ -517,9 +523,21 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
               }
               if (settings.usPerStepCurrent < usPerStepLowerLimit()) settings.usPerStepCurrent = usPerStepLowerLimit();
               if (GOTO_FEATURE == OFF) settings.usPerStepCurrent = usPerStepBase; // force base rate
-              nv.updateBytes(NV_MOUNT_GOTO_BASE, &settings, sizeof(GotoSettings));
+              nv().kv().put(nvKey, settings);
               updateAccelerationRates();
             } else *commandError = CE_SLEW_IN_MOTION;
+          break;
+
+          // meridian flip home mode: direct, visit, or pause
+          case '4':
+            if (transform.isEquatorial() && transform.meridianFlips && GOTO_FEATURE != OFF) {
+              if (parameter[3] >= '0' && parameter[3] <= '2') {
+                settings.meridianFlipHomeMode = (MeridianFlipHomeMode)(parameter[3] - '0');
+                #if MFLIP_HOME_MEMORY == ON
+                  nv().kv().put(nvKey, settings);
+                #endif
+              } else *commandError = CE_PARAM_RANGE;
+            } else *commandError = CE_CMD_UNKNOWN;
           break;
 
           // autoMeridianFlip
@@ -528,7 +546,7 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
               if (parameter[3] == '0' || parameter[3] == '1') {
                 settings.meridianFlipAuto = parameter[3] - '0';
                 #if MFLIP_AUTOMATIC_MEMORY == ON
-                  nv.updateBytes(NV_MOUNT_GOTO_BASE, &settings, sizeof(GotoSettings));
+                  nv().kv().put(nvKey, settings);
                 #endif
               } else *commandError = CE_PARAM_RANGE;
             } else *commandError = CE_CMD_UNKNOWN;
@@ -540,23 +558,28 @@ bool Goto::command(char *reply, char *command, char *parameter, bool *suppressFr
                 case 'E': settings.preferredPierSide = PSS_EAST; break;
                 case 'W': settings.preferredPierSide = PSS_WEST; break;
                 case 'B': settings.preferredPierSide = PSS_BEST; break;
+                case 'A': settings.preferredPierSide = PSS_AUTO; break;
                 default: *commandError = CE_PARAM_RANGE;
               }
               #if PIER_SIDE_PREFERRED_MEMORY == ON
-                nv.updateBytes(NV_MOUNT_GOTO_BASE, &settings, sizeof(GotoSettings));
+                nv().kv().put(nvKey, settings);
               #endif
             } else *commandError = CE_CMD_UNKNOWN;
           break;
-          // pause at home on meridian flip
+          // legacy pause at home toggle
           case '8':
             if (transform.meridianFlips && GOTO_FEATURE != OFF) {
-              if (parameter[3] == '0' || parameter[3] == '1') {
-                #if GOTO_FEATURE == ON
-                  settings.meridianFlipPause = parameter[3] - '0';
-                  #if MFLIP_PAUSE_HOME_MEMORY == ON
-                    nv.updateBytes(NV_MOUNT_GOTO_BASE, &settings, sizeof(GotoSettings));
-                  #endif
-              #endif
+              if (parameter[3] == '0') {
+                if (settings.meridianFlipHomeMode == MFHM_PAUSE) settings.meridianFlipHomeMode = MFHM_VISIT;
+                #if MFLIP_HOME_MEMORY == ON
+                  nv().kv().put(nvKey, settings);
+                #endif
+              } else
+              if (parameter[3] == '1') {
+                settings.meridianFlipHomeMode = MFHM_PAUSE;
+                #if MFLIP_HOME_MEMORY == ON
+                  nv().kv().put(nvKey, settings);
+                #endif
               } else *commandError = CE_PARAM_RANGE;
             } else *commandError = CE_CMD_UNKNOWN;
           break;
